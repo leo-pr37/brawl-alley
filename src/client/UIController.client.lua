@@ -9,10 +9,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
+local SoundService = game:GetService("SoundService")
 
 local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
+local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -46,6 +48,47 @@ _G.MouseFree = true
 _G.GameState = "Lobby"
 UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 UserInputService.MouseIconEnabled = true
+
+local audioConfig = CombatConfig.Audio or {}
+local musicConfig = audioConfig.Music or {}
+
+local function createMusic(name, soundId, volume)
+	if not soundId or soundId == "" then
+		return nil
+	end
+	local sound = Instance.new("Sound")
+	sound.Name = name
+	sound.SoundId = soundId
+	sound.Looped = true
+	sound.Volume = volume or 0.2
+	sound.Parent = SoundService
+	return sound
+end
+
+local lobbyMusic = createMusic("LobbyMusic", musicConfig.LobbyTrackId, musicConfig.Volume)
+local battleMusic = createMusic("BattleMusic", musicConfig.BattleTrackId, musicConfig.Volume)
+
+local function setMusicState(stateName)
+	local inBattle = (stateName == "Playing")
+	if lobbyMusic then
+		if inBattle then
+			lobbyMusic:Stop()
+		elseif not lobbyMusic.IsPlaying then
+			lobbyMusic:Play()
+		end
+	end
+	if battleMusic then
+		if inBattle then
+			if not battleMusic.IsPlaying then
+				battleMusic:Play()
+			end
+		else
+			battleMusic:Stop()
+		end
+	end
+end
+
+setMusicState("Lobby")
 
 -- ===== HEALTH BAR =====
 local healthFrame = Instance.new("Frame")
@@ -540,6 +583,7 @@ local currentWave = 0
 GameStateEvent.OnClientEvent:Connect(function(state, data)
 	if state == "GameStart" then
 		_G.GameState = "Playing"
+		setMusicState("Playing")
 		if typeof(data) == "table" then
 			if data.level then
 				levelSelector.SetValue(data.level)
@@ -595,6 +639,7 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 
 	elseif state == "GameOver" then
 		_G.GameState = "GameOver"
+		setMusicState("GameOver")
 		local finalScore = data or currentScore
 		finalScoreLabel.Text = "FINAL SCORE: " .. tostring(finalScore)
 		gameOverScreen.Visible = true

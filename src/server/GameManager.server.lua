@@ -765,7 +765,13 @@ end
 local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 	local typeName = data.Type.Value
 	local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
-	if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+	local targetRoot = target:FindFirstChild("HumanoidRootPart")
+	if not targetHumanoid or targetHumanoid.Health <= 0 or not targetRoot or not enemy.PrimaryPart then return false end
+
+	local hitCommitRange = math.max(2.5, (enemyDef.AttackRange or 4) * 0.72)
+	if (enemy.PrimaryPart.Position - targetRoot.Position).Magnitude > hitCommitRange then
+		return false
+	end
 
 	local sm = enemyStateMachines[enemy]
 	if sm then sm:SetState("Attacking", true) end
@@ -808,6 +814,7 @@ local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 
 	-- Visual feedback
 	EnemyHitEvent:FireAllClients(enemy, "attack")
+	return true
 end
 
 ------------------------------------------------------------
@@ -847,6 +854,7 @@ local function runEnemyAI()
 							local now = tick()
 							local aggroRange = enemyDef.AggroRange or 28
 							local attackRange = enemyDef.AttackRange or 4
+							local attackCommitRange = math.max(2.5, attackRange * 0.72)
 							local engageDistance = engageDistanceVal and engageDistanceVal.Value or (attackRange + 4)
 							local baseWalkSpeed = baseWalkSpeedVal and baseWalkSpeedVal.Value or humanoid.WalkSpeed
 							local approachWalkSpeed = math.max(6, baseWalkSpeed * 0.55)
@@ -883,7 +891,7 @@ local function runEnemyAI()
 							-- FIGHTING STATE: limited crowding + staggered pressure.
 							local nearbyFighters = countNearbyEnemies(target.HumanoidRootPart.Position, attackRange + 3, enemy)
 							local maxActiveFighters = 2
-							if nearbyFighters >= maxActiveFighters and dist > attackRange then
+							if nearbyFighters >= maxActiveFighters and dist > attackCommitRange then
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
 								local sm = enemyStateMachines[enemy]
@@ -903,7 +911,7 @@ local function runEnemyAI()
 								end
 							end
 
-							if dist <= attackRange then
+							if dist <= attackCommitRange then
 								-- Attack with combo system
 								local lastAtk = data:FindFirstChild("LastAttack")
 								local comboStepVal = data:FindFirstChild("ComboStep")
@@ -921,16 +929,20 @@ local function runEnemyAI()
 												comboStepVal.Value = 0
 												lastAtk.Value = now
 											else
-												comboStepVal.Value = currentStep
-												lastComboVal.Value = now
-												doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
+												if doEnemyComboHit(enemy, enemyDef, data, target, currentStep) then
+													comboStepVal.Value = currentStep
+													lastComboVal.Value = now
+												else
+													comboStepVal.Value = 0
+												end
 											end
 										end
 									elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
-										comboStepVal.Value = 1
-										if lastComboVal then lastComboVal.Value = now end
-										lastAtk.Value = now
-										doEnemyComboHit(enemy, enemyDef, data, target, 1)
+										if doEnemyComboHit(enemy, enemyDef, data, target, 1) then
+											comboStepVal.Value = 1
+											if lastComboVal then lastComboVal.Value = now end
+											lastAtk.Value = now
+										end
 									else
 										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
 											comboStepVal.Value = 0

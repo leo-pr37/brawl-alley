@@ -11,6 +11,7 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 - **Wave System** — 8 handcrafted opening waves per level + endless procedural generation
 - **Co-op Multiplayer (Up to 4 Players)** — Fight together as a team against enemy waves
 - **Full HUD** — Health bar, score, combo counter, wave indicator
+- **Audio Layer** — Built-in combat SFX enabled; optional lobby/battle music via `CombatConfig.Audio.Music`
 - **Game Loop** — Start screen → gameplay → game over → restart
 - **Procedural Arena** — Street/alley environment built entirely with code
 

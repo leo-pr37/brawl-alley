@@ -77,4 +77,24 @@ CombatConfig.Items = {
 	},
 }
 
+-- Audio (all IDs should be free-to-use assets)
+CombatConfig.Audio = {
+	Music = {
+		-- Optional: set these to free Creator Store audio IDs to enable background music.
+		-- Example format: "rbxassetid://1234567890"
+		LobbyTrackId = "rbxassetid://130156110441976",
+		BattleTrackId = "",
+		Volume = 0.2,
+	},
+	SFX = {
+		AttackLightId = "rbxasset://sounds/swordslash.wav",
+		AttackHeavyId = "rbxasset://sounds/swordlunge.wav",
+		HitId = "rbxasset://sounds/swordhit.wav",
+		HurtId = "rbxasset://sounds/uuhhh.wav",
+		BlockId = "rbxasset://sounds/swordhit.wav",
+		PickupId = "rbxasset://sounds/button.wav",
+		Volume = 0.45,
+	},
+}
+
 return CombatConfig

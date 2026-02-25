@@ -10,6 +10,7 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
 
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -26,6 +27,7 @@ local DodgeEvent = ReplicatedStorage:WaitForChild("DodgeEvent")
 local ComicBubbleEvent = ReplicatedStorage:WaitForChild("ComicBubbleEvent", 10)
 local ItemInteractEvent = ReplicatedStorage:WaitForChild("ItemInteractEvent")
 local HeldItemStateEvent = ReplicatedStorage:WaitForChild("HeldItemStateEvent")
+local EnemyHitEvent = ReplicatedStorage:WaitForChild("EnemyHitEvent")
 
 -- Combat state
 local comboCount = 0
@@ -42,6 +44,27 @@ local playerSM = nil -- StateMachine, created on CharacterAdded
 
 local BASE_WALK_SPEED = CombatConfig.PlayerWalkSpeed or 20
 local SPRINT_WALK_SPEED = BASE_WALK_SPEED * 1.5
+local audioConfig = CombatConfig.Audio or {}
+local sfxConfig = audioConfig.SFX or {}
+
+local function createSfx(name, soundId, volume)
+	if not soundId or soundId == "" then
+		return nil
+	end
+	local s = Instance.new("Sound")
+	s.Name = name
+	s.SoundId = soundId
+	s.Volume = volume or 0.45
+	s.Parent = SoundService
+	return s
+end
+
+local sfxAttackLight = createSfx("AttackLight", sfxConfig.AttackLightId, sfxConfig.Volume)
+local sfxAttackHeavy = createSfx("AttackHeavy", sfxConfig.AttackHeavyId, sfxConfig.Volume)
+local sfxHit = createSfx("Hit", sfxConfig.HitId, sfxConfig.Volume)
+local sfxHurt = createSfx("Hurt", sfxConfig.HurtId, sfxConfig.Volume)
+local sfxBlock = createSfx("Block", sfxConfig.BlockId, sfxConfig.Volume)
+local sfxPickup = createSfx("Pickup", sfxConfig.PickupId, sfxConfig.Volume)
 
 -- Get character safely
 local function getCharacter()
@@ -169,6 +192,11 @@ local function doAttack(attackType)
 
 	-- Play local effects
 	playAttackAnimation(attackType)
+	if attackType == "HeavyAttack" then
+		if sfxAttackHeavy then sfxAttackHeavy:Play() end
+	else
+		if sfxAttackLight then sfxAttackLight:Play() end
+	end
 
 	-- Fire combo update for UI
 	local comboEvent = ReplicatedStorage:FindFirstChild("ComboUpdate")
@@ -303,6 +331,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		isBlocking = true
 		BlockEvent:FireServer(true)
 		if playerSM then playerSM:SetState("Blocking", true) end
+		if sfxBlock then sfxBlock:Play() end
 		local char = getCharacter()
 		if char and AnimationManager.HasJoints(char) then
 			AnimationManager.PlayBlock(char)
@@ -438,10 +467,22 @@ end)
 local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
 DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
 	if wasBlocked then return end
+	if sfxHurt then sfxHurt:Play() end
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) and not isBlocking then
 		if playerSM then playerSM:SetState("HitStun", true) end
 		AnimationManager.PlayHitReaction(char)
+	end
+end)
+
+EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType)
+	if hitType ~= "hit" or not sfxHit or not enemy or not enemy:IsA("Model") or not enemy.PrimaryPart then
+		return
+	end
+	local hrp = getHumanoidRootPart()
+	if not hrp then return end
+	if (enemy.PrimaryPart.Position - hrp.Position).Magnitude <= 45 then
+		sfxHit:Play()
 	end
 end)
 
@@ -457,8 +498,11 @@ if ComicBubbleEvent then
 end
 
 HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
+	local wasHolding = heldItemType ~= nil
 	heldItemType = itemType
-	if not itemType then
+	if itemType and not wasHolding and sfxPickup then
+		sfxPickup:Play()
+	elseif not itemType then
 		lastItemUseTime = 0
 	end
 end)
