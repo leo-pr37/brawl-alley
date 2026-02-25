@@ -13,6 +13,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
 local Utils = require(Shared:WaitForChild("Utils"))
+local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
 
 -- Create RemoteEvents for client-server communication
 local function createRemote(className, name)
@@ -30,6 +31,8 @@ local EnemyHitEvent = createRemote("RemoteEvent", "EnemyHitEvent")
 local PlayerDiedEvent = createRemote("RemoteEvent", "PlayerDiedEvent")
 local RequestRestartEvent = createRemote("RemoteEvent", "RequestRestartEvent")
 local SpawnEffectEvent = createRemote("RemoteEvent", "SpawnEffectEvent")
+local EnemyAnimEvent = createRemote("RemoteEvent", "EnemyAnimEvent")
+local ScreenShakeEvent = createRemote("RemoteEvent", "ScreenShakeEvent")
 
 -- Game state
 local gameState = "Lobby" -- Lobby, Playing, GameOver
@@ -270,6 +273,26 @@ local function spawnEnemy(typeName, waveNum)
 	lastAttack.Value = 0
 	lastAttack.Parent = enemyData
 
+	local lastTaunt = Instance.new("NumberValue")
+	lastTaunt.Name = "LastTaunt"
+	lastTaunt.Value = 0
+	lastTaunt.Parent = enemyData
+
+	local comboStep = Instance.new("IntValue")
+	comboStep.Name = "ComboStep"
+	comboStep.Value = 0
+	comboStep.Parent = enemyData
+
+	local lastComboTime = Instance.new("NumberValue")
+	lastComboTime.Name = "LastComboTime"
+	lastComboTime.Value = 0
+	lastComboTime.Parent = enemyData
+
+	local isTaunting = Instance.new("BoolValue")
+	isTaunting.Name = "IsTaunting"
+	isTaunting.Value = false
+	isTaunting.Parent = enemyData
+
 	-- Health bar
 	Utils.CreateHealthBar(model, maxHP)
 
@@ -304,6 +327,85 @@ local function spawnEnemy(typeName, waveNum)
 end
 
 ------------------------------------------------------------
+-- ENEMY AI HELPERS
+------------------------------------------------------------
+local function doEnemyTaunt(enemy, enemyDef, data)
+	local taunting = data:FindFirstChild("IsTaunting")
+	if taunting then taunting.Value = true end
+
+	-- Play taunt animation + text on server (replicates via remote)
+	local typeName = data.Type.Value
+	EnemyAnimEvent:FireAllClients(enemy, "taunt", typeName)
+
+	-- Play the actual joint animation on server too
+	if typeName == "Thug" then
+		AnimationManager.PlayThugTaunt(enemy)
+	elseif typeName == "Brawler" then
+		AnimationManager.PlayBrawlerTaunt(enemy)
+	elseif typeName == "Speedster" then
+		AnimationManager.PlaySpeedsterTaunt(enemy)
+	end
+
+	-- Show taunt text
+	AnimationManager.ShowTauntText(enemy, enemyDef.TauntText, 2)
+
+	local lastTauntVal = data:FindFirstChild("LastTaunt")
+	if lastTauntVal then lastTauntVal.Value = tick() end
+
+	-- Taunt duration before resuming AI
+	local tauntDuration = (typeName == "Brawler") and 1.8 or 1.2
+	task.delay(tauntDuration, function()
+		if taunting and taunting.Parent then
+			taunting.Value = false
+		end
+	end)
+end
+
+local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
+	local typeName = data.Type.Value
+	local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
+	if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+
+	-- Play attack animation
+	EnemyAnimEvent:FireAllClients(enemy, "attack", typeName, hitIndex)
+	if typeName == "Thug" then
+		AnimationManager.PlayThugAttack(enemy, hitIndex)
+	elseif typeName == "Brawler" then
+		AnimationManager.PlayBrawlerAttack(enemy, hitIndex)
+	elseif typeName == "Speedster" then
+		AnimationManager.PlaySpeedsterAttack(enemy, hitIndex)
+	end
+
+	-- Check blocking
+	local isBlocking = false
+	local blockVal = target:FindFirstChild("IsBlocking")
+	if blockVal and blockVal.Value then
+		isBlocking = true
+	end
+
+	-- Calculate damage with combo multiplier
+	local dmgMult = enemyDef.ComboDamageMultipliers and enemyDef.ComboDamageMultipliers[hitIndex] or 1.0
+	local dmg = math.floor(enemyDef.Damage * dmgMult)
+	if isBlocking then
+		dmg = math.floor(dmg * (1 - CombatConfig.BlockDamageReduction))
+	end
+	targetHumanoid:TakeDamage(dmg)
+
+	-- Notify hit player
+	local hitPlayer = Players:GetPlayerFromCharacter(target)
+	if hitPlayer then
+		DamageEvent:FireClient(hitPlayer, dmg, isBlocking, enemy.PrimaryPart.Position)
+		-- Screen shake on heavy hits (Brawler combo finishers, etc.)
+		if dmgMult >= 1.3 then
+			ScreenShakeEvent:FireClient(hitPlayer, dmgMult * 5, 0.3)
+		end
+	end
+
+	-- Visual feedback
+	EnemyHitEvent:FireAllClients(enemy, "attack")
+end
+
+------------------------------------------------------------
 -- ENEMY AI LOOP
 ------------------------------------------------------------
 local function runEnemyAI()
@@ -313,41 +415,65 @@ local function runEnemyAI()
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
 				local data = enemy:FindFirstChild("EnemyData")
 				if humanoid and humanoid.Health > 0 and data then
+					-- Skip if currently taunting
+					local taunting = data:FindFirstChild("IsTaunting")
+					if taunting and taunting.Value then
+						continue
+					end
+
 					local typeName = data:FindFirstChild("Type") and data.Type.Value or "Thug"
 					local enemyDef = EnemyTypes.Types[typeName]
 					if enemyDef then
 						local target, dist = findNearestPlayer(enemy.PrimaryPart.Position)
 						if target and dist <= enemyDef.AggroRange then
+							-- Check for taunt opportunity
+							local lastTauntVal = data:FindFirstChild("LastTaunt")
+							local now = tick()
+							local tauntCooldown = enemyDef.TauntCooldown or 8
+							if lastTauntVal and (now - lastTauntVal.Value) >= tauntCooldown then
+								if math.random() < (enemyDef.TauntChance or 0.2) then
+									doEnemyTaunt(enemy, enemyDef, data)
+									continue
+								end
+							end
+
 							if dist <= enemyDef.AttackRange then
-								-- Attack
+								-- Attack with combo system
 								local lastAtk = data:FindFirstChild("LastAttack")
-								local now = tick()
-								if lastAtk and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
-									lastAtk.Value = now
-									-- Deal damage to player
-									local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
-									if targetHumanoid and targetHumanoid.Health > 0 then
-										-- Check if player is blocking
-										local isBlocking = false
-										local blockVal = target:FindFirstChild("IsBlocking")
-										if blockVal and blockVal.Value then
-											isBlocking = true
-										end
+								local comboStepVal = data:FindFirstChild("ComboStep")
+								local lastComboVal = data:FindFirstChild("LastComboTime")
 
-										local dmg = enemyDef.Damage
-										if isBlocking then
-											dmg = math.floor(dmg * (1 - CombatConfig.BlockDamageReduction))
-										end
-										targetHumanoid:TakeDamage(dmg)
+								if lastAtk and comboStepVal then
+									local comboHits = enemyDef.ComboHits or 1
+									local comboCooldown = enemyDef.ComboCooldown or 0.5
+									local currentStep = comboStepVal.Value
 
-										-- Notify the hit player's client
-										local player = Players:GetPlayerFromCharacter(target)
-										if player then
-											DamageEvent:FireClient(player, dmg, isBlocking, enemy.PrimaryPart.Position)
+									-- Check if we're mid-combo or starting fresh
+									if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) < comboCooldown + 0.3 then
+										-- Continue combo if enough time passed
+										if (now - lastComboVal.Value) >= comboCooldown then
+											currentStep = currentStep + 1
+											if currentStep > comboHits then
+												-- Combo finished, reset with full cooldown
+												comboStepVal.Value = 0
+												lastAtk.Value = now
+											else
+												comboStepVal.Value = currentStep
+												lastComboVal.Value = now
+												doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
+											end
 										end
-
-										-- Visual feedback: enemy attack flash
-										EnemyHitEvent:FireAllClients(enemy, "attack")
+									elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
+										-- Start new combo
+										comboStepVal.Value = 1
+										if lastComboVal then lastComboVal.Value = now end
+										lastAtk.Value = now
+										doEnemyComboHit(enemy, enemyDef, data, target, 1)
+									else
+										-- Combo timed out, reset
+										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
+											comboStepVal.Value = 0
+										end
 									end
 								end
 							else
@@ -359,7 +485,7 @@ local function runEnemyAI()
 				end
 			end
 		end
-		task.wait(0.2) -- AI tick rate
+		task.wait(0.15) -- AI tick rate (slightly faster for combo responsiveness)
 	end
 end
 

@@ -1,5 +1,6 @@
 -- Utils: Shared utility functions
 local Utils = {}
+local AnimationManager -- lazy-loaded to avoid circular dependency
 
 -- Create a humanoid NPC model from scratch
 function Utils.CreateNPCModel(name, position, color, scaleMultiplier)
@@ -118,6 +119,18 @@ function Utils.CreateNPCModel(name, position, color, scaleMultiplier)
 	humanoid.NameDisplayDistance = 50
 
 	model.PrimaryPart = torso
+
+	-- Set up Motor6D joints for animation
+	if not AnimationManager then
+		local ok, mod = pcall(function()
+			return require(script.Parent:WaitForChild("AnimationManager", 2))
+		end)
+		if ok then AnimationManager = mod end
+	end
+	if AnimationManager then
+		AnimationManager.SetupJoints(model, scaleMultiplier)
+	end
+
 	return model
 end
 

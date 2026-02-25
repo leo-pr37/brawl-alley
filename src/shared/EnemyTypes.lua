@@ -15,6 +15,14 @@ EnemyTypes.Types = {
 		ScoreValue = 100,
 		KnockbackResist = 0,
 		Description = "Basic street thug. Slow but steady.",
+		-- Combo: 2-hit (hook + hook)
+		ComboHits = 2,
+		ComboCooldown = 0.5, -- time between combo hits
+		ComboDamageMultipliers = {1.0, 1.2},
+		-- Taunt
+		TauntText = "You're dead meat!",
+		TauntCooldown = 8, -- minimum seconds between taunts
+		TauntChance = 0.3, -- chance to taunt when entering aggro
 	},
 	Brawler = {
 		Name = "Brawler",
@@ -29,6 +37,14 @@ EnemyTypes.Types = {
 		ScoreValue = 200,
 		KnockbackResist = 0.4,
 		Description = "Big and tough. Hits hard, takes a beating.",
+		-- Combo: 3-hit (haymaker + bodyslam + ground pound)
+		ComboHits = 3,
+		ComboCooldown = 0.7,
+		ComboDamageMultipliers = {1.0, 1.3, 1.8},
+		-- Taunt
+		TauntText = "I'll crush you!",
+		TauntCooldown = 10,
+		TauntChance = 0.25,
 	},
 	Speedster = {
 		Name = "Speedster",
@@ -43,6 +59,14 @@ EnemyTypes.Types = {
 		ScoreValue = 150,
 		KnockbackResist = 0,
 		Description = "Fast and annoying. Attacks quickly.",
+		-- Combo: 4-hit (jab + jab + jab + spinning kick)
+		ComboHits = 4,
+		ComboCooldown = 0.25,
+		ComboDamageMultipliers = {0.8, 0.8, 0.8, 1.5},
+		-- Taunt
+		TauntText = "Can't touch this!",
+		TauntCooldown = 6,
+		TauntChance = 0.35,
 	},
 }
 

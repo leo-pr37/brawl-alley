@@ -12,6 +12,7 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
+local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
 
 -- Remote events
 local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
@@ -56,32 +57,22 @@ local function getLookDirection()
 	return Vector3.new(0, 0, -1)
 end
 
--- Attack visual feedback (arm swing)
+-- Attack visual feedback using AnimationManager
 local function playAttackAnimation(attackType)
 	local char = getCharacter()
 	if not char then return end
 
-	local rightArm = char:FindFirstChild("Right Arm")
-	if not rightArm then return end
+	-- Set up joints on player character if not done yet
+	if not AnimationManager.HasJoints(char) then
+		AnimationManager.SetupJoints(char, 1)
+	end
 
-	-- Simple punch animation using welds
-	-- In a real game you'd use Animations, but for code-only we do visual tweaks
-	task.spawn(function()
-		local config = CombatConfig.Attacks[attackType]
-		local duration = config and config.AnimDuration or 0.3
-
-		-- Flash the character's arms to indicate attack
-		local origColor = rightArm.BrickColor
-		if attackType == "HeavyAttack" then
-			rightArm.BrickColor = BrickColor.new("Bright orange")
-		else
-			rightArm.BrickColor = BrickColor.new("White")
-		end
-		task.wait(duration)
-		if rightArm and rightArm.Parent then
-			rightArm.BrickColor = origColor
-		end
-	end)
+	if attackType == "HeavyAttack" then
+		AnimationManager.PlayHeavyPunch(char)
+	else
+		-- Light attack uses combo index for varied animations
+		AnimationManager.PlayLightPunch(char, comboCount)
+	end
 end
 
 -- Perform attack
@@ -155,6 +146,12 @@ local function doDodge()
 
 	DodgeEvent:FireServer(moveDir)
 
+	-- Play dodge animation
+	local char2 = getCharacter()
+	if char2 and AnimationManager.HasJoints(char2) then
+		AnimationManager.PlayDodge(char2)
+	end
+
 	-- Visual: brief transparency
 	task.spawn(function()
 		local char = getCharacter()
@@ -189,6 +186,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isBlocking = true
 		BlockEvent:FireServer(true)
+		local char = getCharacter()
+		if char and AnimationManager.HasJoints(char) then
+			AnimationManager.PlayBlock(char)
+		end
 	end
 
 	-- Shift: dodge
@@ -220,6 +221,10 @@ UserInputService.InputEnded:Connect(function(input, processed)
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isBlocking = false
 		BlockEvent:FireServer(false)
+		local char = getCharacter()
+		if char and AnimationManager.HasJoints(char) then
+			AnimationManager.PlayUnblock(char)
+		end
 	end
 end)
 
@@ -293,5 +298,33 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 end)
+
+-- Hit reaction when taking damage
+local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
+DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
+	if wasBlocked then return end -- no flinch when blocking
+	local char = getCharacter()
+	if char and AnimationManager.HasJoints(char) and not isBlocking then
+		AnimationManager.PlayHitReaction(char)
+	end
+end)
+
+-- Setup joints on character spawn
+player.CharacterAdded:Connect(function(character)
+	task.wait(0.5) -- wait for character to fully load
+	if not AnimationManager.HasJoints(character) then
+		AnimationManager.SetupJoints(character, 1)
+	end
+end)
+
+-- Setup joints on current character if it exists
+if player.Character then
+	task.spawn(function()
+		task.wait(0.5)
+		if player.Character and not AnimationManager.HasJoints(player.Character) then
+			AnimationManager.SetupJoints(player.Character, 1)
+		end
+	end)
+end
 
 print("[BrawlAlley] CombatController loaded")

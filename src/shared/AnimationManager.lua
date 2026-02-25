@@ -1,0 +1,777 @@
+--[[
+	AnimationManager (Shared)
+	Procedural animation system using Motor6D C0/C1 CFrame manipulation.
+	Works on both client (player) and server (enemies).
+	No Animation assets needed - pure code-driven joint transforms.
+]]
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+local AnimationManager = {}
+AnimationManager.__index = AnimationManager
+
+-- Joint rest poses (relative to parent)
+local REST_POSES = {
+	RightShoulder = CFrame.new(1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
+	LeftShoulder  = CFrame.new(-1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
+	RightHip      = CFrame.new(0.5, -1, 0) * CFrame.Angles(0, 0, 0),
+	LeftHip       = CFrame.new(-0.5, -1, 0) * CFrame.Angles(0, 0, 0),
+	Neck          = CFrame.new(0, 1.1, 0) * CFrame.Angles(0, 0, 0),
+	RootJoint     = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, 0),
+}
+
+------------------------------------------------------------
+-- UTILITY
+------------------------------------------------------------
+local function getMotor(model, motorName)
+	if not model then return nil end
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("Motor6D") and desc.Name == motorName then
+			return desc
+		end
+	end
+	return nil
+end
+
+local function getAllMotors(model)
+	local motors = {}
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("Motor6D") then
+			motors[desc.Name] = desc
+		end
+	end
+	return motors
+end
+
+-- Tween a Motor6D's C0 to a target CFrame
+local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
+	if not motor then return nil end
+	easingStyle = easingStyle or Enum.EasingStyle.Quad
+	easingDir = easingDir or Enum.EasingDirection.Out
+	local tween = TweenService:Create(motor, TweenInfo.new(duration, easingStyle, easingDir), {
+		C0 = targetC0
+	})
+	tween:Play()
+	return tween
+end
+
+-- Reset all joints to rest pose
+function AnimationManager.ResetPose(model, duration)
+	duration = duration or 0.2
+	local motors = getAllMotors(model)
+	for name, motor in pairs(motors) do
+		local rest = REST_POSES[name]
+		if rest then
+			tweenMotor(motor, rest, duration)
+		end
+	end
+end
+
+-- Check if model has Motor6D joints (was set up with SetupJoints)
+function AnimationManager.HasJoints(model)
+	return getMotor(model, "RightShoulder") ~= nil
+end
+
+------------------------------------------------------------
+-- JOINT SETUP (call after creating NPC model)
+------------------------------------------------------------
+function AnimationManager.SetupJoints(model, scaleMultiplier)
+	local s = scaleMultiplier or 1
+	local torso = model:FindFirstChild("HumanoidRootPart")
+	if not torso then return end
+
+	local head = model:FindFirstChild("Head")
+	local leftArm = model:FindFirstChild("Left Arm")
+	local rightArm = model:FindFirstChild("Right Arm")
+	local leftLeg = model:FindFirstChild("Left Leg")
+	local rightLeg = model:FindFirstChild("Right Leg")
+
+	-- Remove old WeldConstraints
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("WeldConstraint") then
+			desc:Destroy()
+		end
+	end
+
+	-- Create Motor6D joints
+	if head then
+		local neck = Instance.new("Motor6D")
+		neck.Name = "Neck"
+		neck.Part0 = torso
+		neck.Part1 = head
+		neck.C0 = CFrame.new(0, 1.1 * s, 0)
+		neck.C1 = CFrame.new(0, 0, 0)
+		neck.Parent = torso
+	end
+
+	if rightArm then
+		local rShoulder = Instance.new("Motor6D")
+		rShoulder.Name = "RightShoulder"
+		rShoulder.Part0 = torso
+		rShoulder.Part1 = rightArm
+		rShoulder.C0 = CFrame.new(1.3 * s, 0.5 * s, 0)
+		rShoulder.C1 = CFrame.new(0, 0.5 * s, 0)
+		rShoulder.Parent = torso
+	end
+
+	if leftArm then
+		local lShoulder = Instance.new("Motor6D")
+		lShoulder.Name = "LeftShoulder"
+		lShoulder.Part0 = torso
+		lShoulder.Part1 = leftArm
+		lShoulder.C0 = CFrame.new(-1.3 * s, 0.5 * s, 0)
+		lShoulder.C1 = CFrame.new(0, 0.5 * s, 0)
+		lShoulder.Parent = torso
+	end
+
+	if rightLeg then
+		local rHip = Instance.new("Motor6D")
+		rHip.Name = "RightHip"
+		rHip.Part0 = torso
+		rHip.Part1 = rightLeg
+		rHip.C0 = CFrame.new(0.5 * s, -1 * s, 0)
+		rHip.C1 = CFrame.new(0, 0.5 * s, 0)
+		rHip.Parent = torso
+	end
+
+	if leftLeg then
+		local lHip = Instance.new("Motor6D")
+		lHip.Name = "LeftHip"
+		lHip.Part0 = torso
+		lHip.Part1 = leftLeg
+		lHip.C0 = CFrame.new(-0.5 * s, -1 * s, 0)
+		lHip.C1 = CFrame.new(0, 0.5 * s, 0)
+		lHip.Parent = torso
+	end
+end
+
+------------------------------------------------------------
+-- PLAYER ANIMATIONS
+------------------------------------------------------------
+
+-- Light punch / jab - quick forward thrust of right arm
+function AnimationManager.PlayLightPunch(model, comboIndex)
+	local s = 1
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	comboIndex = comboIndex or 1
+
+	if comboIndex == 1 then
+		-- Jab: right arm forward punch
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-90), 0, 0),
+			0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-30), 0, math.rad(15)),
+				0.08)
+		end
+		-- Slight torso twist
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(-10), 0), 0.08)
+		end
+		task.delay(0.15, function()
+			AnimationManager.ResetPose(model, 0.12)
+		end)
+
+	elseif comboIndex == 2 then
+		-- Cross: left arm forward punch
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-90), 0, 0),
+				0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		end
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-30), 0, math.rad(-15)),
+			0.08)
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(10), 0), 0.08)
+		end
+		task.delay(0.15, function()
+			AnimationManager.ResetPose(model, 0.12)
+		end)
+
+	elseif comboIndex == 3 then
+		-- Hook: right arm swings from side
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-70), math.rad(-60), math.rad(20)),
+			0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		-- Torso twists into hook
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(-25), 0), 0.06)
+		end
+		-- Front foot steps in
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-15), 0, 0),
+				0.06)
+		end
+		task.delay(0.18, function()
+			AnimationManager.ResetPose(model, 0.15)
+		end)
+
+	elseif comboIndex == 4 then
+		-- Uppercut: arm swings up from below
+		-- Wind down first
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(30), 0, math.rad(-10)),
+			0.05)
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(10), 0, 0), 0.05)
+		end
+		-- Crouch legs
+		if motors.RightHip then
+			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.05)
+		end
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.05)
+		end
+
+		task.delay(0.06, function()
+			-- Explode upward
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-160), math.rad(10), math.rad(-10)),
+				0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			if motors.RootJoint then
+				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-15), math.rad(-15), 0), 0.08)
+			end
+			if motors.RightHip then
+				tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-5), 0, 0), 0.08)
+			end
+			if motors.LeftHip then
+				tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-5), 0, 0), 0.08)
+			end
+		end)
+
+		task.delay(0.25, function()
+			AnimationManager.ResetPose(model, 0.2)
+		end)
+	end
+end
+
+-- Heavy punch - big wind-up + powerful swing
+function AnimationManager.PlayHeavyPunch(model)
+	local s = 1
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	-- Wind-up: pull arm back, lean back
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(20), math.rad(40), math.rad(30)),
+		0.15)
+	if motors.LeftShoulder then
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-40), 0, math.rad(20)),
+			0.15)
+	end
+	if motors.RootJoint then
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(5), math.rad(30), 0), 0.15)
+	end
+
+	task.delay(0.16, function()
+		-- SLAM forward
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-100), math.rad(-20), math.rad(-10)),
+			0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-10), math.rad(-30), 0), 0.08)
+		end
+		-- Step forward
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-25), 0, 0),
+				0.08)
+		end
+		if motors.RightHip then
+			tweenMotor(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0),
+				0.08)
+		end
+	end)
+
+	task.delay(0.4, function()
+		AnimationManager.ResetPose(model, 0.25)
+	end)
+end
+
+-- Block: arms up guard
+function AnimationManager.PlayBlock(model)
+	local s = 1
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-80), math.rad(-30), math.rad(20)),
+		0.1)
+	if motors.LeftShoulder then
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-80), math.rad(30), math.rad(-20)),
+			0.1)
+	end
+	-- Slight crouch
+	if motors.RightHip then
+		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+	end
+	if motors.LeftHip then
+		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+	end
+end
+
+-- Unblock: return to rest
+function AnimationManager.PlayUnblock(model)
+	AnimationManager.ResetPose(model, 0.15)
+end
+
+-- Dodge: quick sidestep lean
+function AnimationManager.PlayDodge(model)
+	local s = 1
+	local motors = getAllMotors(model)
+	if not motors.RootJoint then return end
+
+	-- Lean and tuck
+	tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-15), 0, math.rad(25)), 0.08)
+	if motors.RightShoulder then
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(30)),
+			0.08)
+	end
+	if motors.LeftShoulder then
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(-30)),
+			0.08)
+	end
+	-- Tuck legs
+	if motors.RightHip then
+		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(25), 0, 0), 0.08)
+	end
+	if motors.LeftHip then
+		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(25), 0, 0), 0.08)
+	end
+
+	task.delay(0.35, function()
+		AnimationManager.ResetPose(model, 0.2)
+	end)
+end
+
+-- Hit reaction: flinch when taking damage
+function AnimationManager.PlayHitReaction(model)
+	local s = 1
+	local motors = getAllMotors(model)
+
+	-- Snap backward flinch
+	if motors.RootJoint then
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(15), 0, math.rad(5)), 0.05)
+	end
+	if motors.Neck then
+		tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(15), 0, 0), 0.05)
+	end
+	-- Arms fling out
+	if motors.RightShoulder then
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(35)),
+			0.05)
+	end
+	if motors.LeftShoulder then
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(-35)),
+			0.05)
+	end
+
+	task.delay(0.2, function()
+		AnimationManager.ResetPose(model, 0.2)
+	end)
+end
+
+------------------------------------------------------------
+-- ENEMY ANIMATIONS
+------------------------------------------------------------
+
+-- THUG: basic hook attack
+function AnimationManager.PlayThugAttack(model, hitIndex)
+	local s = 1.0
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	hitIndex = hitIndex or 1
+	local isRight = (hitIndex % 2 == 1)
+	local shoulder = isRight and motors.RightShoulder or motors.LeftShoulder
+	local xSign = isRight and 1 or -1
+
+	if not shoulder then return end
+
+	-- Wind up
+	tweenMotor(shoulder,
+		CFrame.new(xSign * 1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-50), math.rad(xSign * 50), math.rad(xSign * 20)),
+		0.15)
+	if motors.RootJoint then
+		tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(xSign * 20), 0), 0.15)
+	end
+
+	task.delay(0.18, function()
+		-- Swing hook
+		tweenMotor(shoulder,
+			CFrame.new(xSign * 1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-80), math.rad(xSign * -40), math.rad(xSign * -10)),
+			0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(xSign * -20), 0), 0.08)
+		end
+	end)
+
+	task.delay(0.35, function()
+		AnimationManager.ResetPose(model, 0.2)
+	end)
+end
+
+-- THUG TAUNT: crack knuckles, pound fists
+function AnimationManager.PlayThugTaunt(model)
+	local s = 1.0
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder or not motors.LeftShoulder then return end
+
+	-- Bring both fists together in front
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-70), math.rad(-30), 0),
+		0.2)
+	tweenMotor(motors.LeftShoulder,
+		CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-70), math.rad(30), 0),
+		0.2)
+
+	task.delay(0.3, function()
+		-- Pound fists: right hits left
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-60), math.rad(-10), 0),
+			0.08, Enum.EasingStyle.Back)
+	end)
+
+	task.delay(0.5, function()
+		-- Pull apart, flex
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-70), math.rad(-30), 0),
+			0.08)
+	end)
+
+	task.delay(0.7, function()
+		-- Another pound
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-60), math.rad(-10), 0),
+			0.08, Enum.EasingStyle.Back)
+	end)
+
+	task.delay(1.0, function()
+		AnimationManager.ResetPose(model, 0.3)
+	end)
+end
+
+-- BRAWLER: haymaker attack
+function AnimationManager.PlayBrawlerAttack(model, hitIndex)
+	local s = 1.3
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	hitIndex = hitIndex or 1
+
+	if hitIndex == 1 then
+		-- Haymaker: massive wind-up swing
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(10), math.rad(60), math.rad(40)),
+			0.25)
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(5), math.rad(40), 0), 0.25)
+		end
+		task.delay(0.3, function()
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-110), math.rad(-30), math.rad(-20)),
+				0.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			if motors.RootJoint then
+				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-10), math.rad(-40), 0), 0.1)
+			end
+		end)
+		task.delay(0.55, function()
+			AnimationManager.ResetPose(model, 0.25)
+		end)
+
+	elseif hitIndex == 2 then
+		-- Body slam: lean forward, both arms slam down
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(15), 0, 0), 0.2)
+		end
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-140), 0, math.rad(20)),
+			0.2)
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-140), 0, math.rad(-20)),
+				0.2)
+		end
+		task.delay(0.25, function()
+			-- Slam down
+			if motors.RootJoint then
+				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-25), 0, 0), 0.1, Enum.EasingStyle.Back)
+			end
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(10)),
+				0.1, Enum.EasingStyle.Back)
+			if motors.LeftShoulder then
+				tweenMotor(motors.LeftShoulder,
+					CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(-10)),
+					0.1, Enum.EasingStyle.Back)
+			end
+		end)
+		task.delay(0.5, function()
+			AnimationManager.ResetPose(model, 0.3)
+		end)
+
+	elseif hitIndex == 3 then
+		-- Ground pound: jump up, slam both fists down
+		-- Crouch
+		if motors.RightHip then
+			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(30), 0, 0), 0.15)
+		end
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(30), 0, 0), 0.15)
+		end
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-160), 0, math.rad(15)),
+			0.15)
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-160), 0, math.rad(-15)),
+				0.15)
+		end
+
+		task.delay(0.2, function()
+			-- Slam down
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(5)),
+				0.1, Enum.EasingStyle.Back)
+			if motors.LeftShoulder then
+				tweenMotor(motors.LeftShoulder,
+					CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(-5)),
+					0.1, Enum.EasingStyle.Back)
+			end
+			if motors.RootJoint then
+				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-20), 0, 0), 0.1, Enum.EasingStyle.Back)
+			end
+			if motors.RightHip then
+				tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0), 0.1)
+			end
+			if motors.LeftHip then
+				tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0), 0.1)
+			end
+		end)
+
+		task.delay(0.5, function()
+			AnimationManager.ResetPose(model, 0.3)
+		end)
+	end
+end
+
+-- BRAWLER TAUNT: beat chest, flex
+function AnimationManager.PlayBrawlerTaunt(model)
+	local s = 1.3
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder or not motors.LeftShoulder then return end
+
+	-- Arms out to sides
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(0, 0, math.rad(70)),
+		0.2)
+	tweenMotor(motors.LeftShoulder,
+		CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(0, 0, math.rad(-70)),
+		0.2)
+
+	-- Beat chest rhythm
+	for i = 0, 2 do
+		task.delay(0.3 + i * 0.2, function()
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-40), math.rad(-20), math.rad(20)),
+				0.08, Enum.EasingStyle.Back)
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-40), math.rad(20), math.rad(-20)),
+				0.08, Enum.EasingStyle.Back)
+		end)
+		task.delay(0.4 + i * 0.2, function()
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(0, 0, math.rad(70)),
+				0.08)
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(0, 0, math.rad(-70)),
+				0.08)
+		end)
+	end
+
+	-- End with a flex
+	task.delay(1.0, function()
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-60), 0, math.rad(70)),
+			0.15)
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-60), 0, math.rad(-70)),
+			0.15)
+	end)
+
+	task.delay(1.5, function()
+		AnimationManager.ResetPose(model, 0.3)
+	end)
+end
+
+-- SPEEDSTER: rapid jab attacks
+function AnimationManager.PlaySpeedsterAttack(model, hitIndex)
+	local s = 0.85
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	hitIndex = hitIndex or 1
+
+	if hitIndex <= 3 then
+		-- Rapid jabs alternating arms
+		local isRight = (hitIndex % 2 == 1)
+		local shoulder = isRight and motors.RightShoulder or motors.LeftShoulder
+		local otherShoulder = isRight and motors.LeftShoulder or motors.RightShoulder
+		local xSign = isRight and 1 or -1
+
+		if shoulder then
+			tweenMotor(shoulder,
+				CFrame.new(xSign * 1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-95), 0, 0),
+				0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		end
+		if otherShoulder then
+			tweenMotor(otherShoulder,
+				CFrame.new(-xSign * 1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-40), 0, math.rad(-xSign * 15)),
+				0.05)
+		end
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(xSign * -8), 0), 0.05)
+		end
+
+		task.delay(0.1, function()
+			AnimationManager.ResetPose(model, 0.06)
+		end)
+
+	elseif hitIndex == 4 then
+		-- Spinning kick
+		if motors.RootJoint then
+			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-10), math.rad(-45), 0), 0.08)
+		end
+		if motors.RightHip then
+			tweenMotor(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-90), 0, math.rad(30)),
+				0.08, Enum.EasingStyle.Back)
+		end
+		-- Arms back for balance
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(10), 0, math.rad(40)),
+			0.08)
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(10), 0, math.rad(-40)),
+				0.08)
+		end
+
+		task.delay(0.1, function()
+			-- Complete spin
+			if motors.RootJoint then
+				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-10), math.rad(45), 0), 0.1)
+			end
+		end)
+
+		task.delay(0.3, function()
+			AnimationManager.ResetPose(model, 0.2)
+		end)
+	end
+end
+
+-- SPEEDSTER TAUNT: shuffle boxing stance
+function AnimationManager.PlaySpeedsterTaunt(model)
+	local s = 0.85
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder or not motors.LeftShoulder then return end
+
+	-- Boxing guard
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-75), math.rad(-20), math.rad(10)),
+		0.1)
+	tweenMotor(motors.LeftShoulder,
+		CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-85), math.rad(15), math.rad(-10)),
+		0.1)
+
+	-- Quick shuffle: alternate leg bouncing
+	for i = 0, 4 do
+		task.delay(0.15 + i * 0.15, function()
+			local hip = (i % 2 == 0) and motors.RightHip or motors.LeftHip
+			local otherHip = (i % 2 == 0) and motors.LeftHip or motors.RightHip
+			local xSign = (i % 2 == 0) and 1 or -1
+			if hip then
+				tweenMotor(hip,
+					CFrame.new(xSign * 0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-15), 0, 0),
+					0.07)
+			end
+			if otherHip then
+				tweenMotor(otherHip,
+					CFrame.new(-xSign * 0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0),
+					0.07)
+			end
+		end)
+	end
+
+	task.delay(1.0, function()
+		AnimationManager.ResetPose(model, 0.2)
+	end)
+end
+
+------------------------------------------------------------
+-- TAUNT BILLBOARD TEXT
+------------------------------------------------------------
+function AnimationManager.ShowTauntText(model, text, duration)
+	duration = duration or 2
+	if not model or not model.PrimaryPart then return end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "TauntText"
+	billboard.Size = UDim2.new(6, 0, 1.5, 0)
+	billboard.StudsOffset = Vector3.new(0, 5, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Adornee = model.PrimaryPart
+	billboard.Parent = model
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(255, 255, 50)
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextStrokeTransparency = 0
+	label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	label.Parent = billboard
+
+	-- Pop in
+	label.TextTransparency = 1
+	label.TextStrokeTransparency = 1
+
+	local ts = game:GetService("TweenService")
+	ts:Create(label, TweenInfo.new(0.15, Enum.EasingStyle.Back), {
+		TextTransparency = 0,
+		TextStrokeTransparency = 0
+	}):Play()
+
+	-- Fade out
+	task.delay(duration - 0.3, function()
+		if label and label.Parent then
+			ts:Create(label, TweenInfo.new(0.3), {
+				TextTransparency = 1,
+				TextStrokeTransparency = 1
+			}):Play()
+		end
+	end)
+
+	task.delay(duration, function()
+		if billboard and billboard.Parent then
+			billboard:Destroy()
+		end
+	end)
+end
+
+return AnimationManager
