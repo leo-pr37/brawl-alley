@@ -42,6 +42,7 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
 
 _G.MouseFree = true
+_G.GameState = "Lobby"
 UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 UserInputService.MouseIconEnabled = true
 
@@ -158,7 +159,7 @@ waveLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
 waveLabel.TextTransparency = 1
 waveLabel.Parent = screenGui
 
--- ===== DAMAGE FLASH =====
+-- ===== DAMAGE FLASH (red border + subtle tint) =====
 local damageFlash = Instance.new("Frame")
 damageFlash.Name = "DamageFlash"
 damageFlash.Size = UDim2.new(1, 0, 1, 0)
@@ -167,6 +168,13 @@ damageFlash.BackgroundTransparency = 1
 damageFlash.BorderSizePixel = 0
 damageFlash.ZIndex = 10
 damageFlash.Parent = screenGui
+
+local damageBorder = Instance.new("UIStroke")
+damageBorder.Name = "DamageBorder"
+damageBorder.Color = Color3.fromRGB(200, 0, 0)
+damageBorder.Thickness = 8
+damageBorder.Transparency = 1
+damageBorder.Parent = damageFlash
 
 -- ===== START SCREEN =====
 local startScreen = Instance.new("Frame")
@@ -466,6 +474,7 @@ local currentWave = 0
 -- Game state changes
 GameStateEvent.OnClientEvent:Connect(function(state, data)
 	if state == "GameStart" then
+		_G.GameState = "Playing"
 		if typeof(data) == "table" then
 			if data.level then
 				levelSelector.SetValue(data.level)
@@ -520,6 +529,7 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 		end)
 
 	elseif state == "GameOver" then
+		_G.GameState = "GameOver"
 		local finalScore = data or currentScore
 		finalScoreLabel.Text = "FINAL SCORE: " .. tostring(finalScore)
 		gameOverScreen.Visible = true
@@ -545,17 +555,20 @@ ScoreEvent.OnClientEvent:Connect(function(scoreType, amount, total)
 	end)
 end)
 
--- Damage taken
+-- Damage taken — red border flash + subtle tint
 DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
-	-- Red flash
 	task.spawn(function()
 		if wasBlocked then
 			damageFlash.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+			damageBorder.Color = Color3.fromRGB(0, 120, 200)
 		else
 			damageFlash.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+			damageBorder.Color = Color3.fromRGB(200, 0, 0)
 		end
-		damageFlash.BackgroundTransparency = 0.5
-		TweenService:Create(damageFlash, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+		damageFlash.BackgroundTransparency = 0.85
+		damageBorder.Transparency = 0
+		TweenService:Create(damageFlash, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+		TweenService:Create(damageBorder, TweenInfo.new(0.5), {Transparency = 1}):Play()
 	end)
 end)
 

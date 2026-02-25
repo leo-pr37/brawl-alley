@@ -39,13 +39,13 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.DisplayOrder = 100
 screenGui.Parent = playerGui
 
--- Full-screen backdrop (captures mouse so it can move freely)
+-- Full-screen backdrop (subtle, allows seeing the game)
 local backdrop = Instance.new("TextButton")
 backdrop.Name = "DevBackdrop"
 backdrop.Size = UDim2.new(1, 0, 1, 0)
 backdrop.Position = UDim2.new(0, 0, 0, 0)
 backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-backdrop.BackgroundTransparency = 0.7
+backdrop.BackgroundTransparency = 0.9
 backdrop.BorderSizePixel = 0
 backdrop.Text = ""
 backdrop.AutoButtonColor = false
@@ -58,10 +58,10 @@ backdrop.Parent = screenGui
 -- Main panel frame (right side)
 local panel = Instance.new("ScrollingFrame")
 panel.Name = "DevPanel"
-panel.Size = UDim2.new(0, 280, 0.85, 0)
-panel.Position = UDim2.new(1, -290, 0.075, 0)
+panel.Size = UDim2.new(0, 220, 0.8, 0)
+panel.Position = UDim2.new(1, -230, 0.1, 0)
 panel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-panel.BackgroundTransparency = 0.15
+panel.BackgroundTransparency = 0.25
 panel.BorderSizePixel = 0
 panel.ScrollBarThickness = 6
 panel.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 120)
@@ -266,9 +266,12 @@ createSeparator()
 -- === ENEMY CONTROLS ===
 createHeader("ENEMY CONTROLS")
 
-createToggleButton("Freeze Enemies", function(on)
-	freezeOn = on
-	if DevFreezeEvent then DevFreezeEvent:FireServer() end
+local freezeBtn = createToggleButton("Freeze Enemies", function(on)
+	-- Only fire if the state actually needs to change
+	if on ~= freezeOn then
+		freezeOn = on
+		if DevFreezeEvent then DevFreezeEvent:FireServer() end
+	end
 end)
 
 createButton("Kill All Enemies", function()
@@ -366,14 +369,33 @@ local function togglePanel()
 	backdrop.Visible = panelOpen
 
 	if panelOpen then
-		-- Unlock mouse so buttons are clickable (flag stops camera from re-locking)
+		-- Unlock mouse so buttons are clickable
 		_G.MouseFree = true
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 		UserInputService.MouseIconEnabled = true
+		-- Auto-freeze enemies when dev panel opens
+		if not freezeOn and DevFreezeEvent then
+			freezeOn = true
+			DevFreezeEvent:FireServer()
+			-- Sync button visual
+			freezeBtn.BackgroundColor3 = Color3.fromRGB(30, 120, 50)
+			freezeBtn.Text = "Freeze Enemies [ON]"
+		end
 	else
-		-- Re-lock mouse for camera control
-		_G.MouseFree = false
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+		-- Only re-lock mouse if game is actively playing (not in menus)
+		local gameState = _G.GameState or "Lobby"
+		if gameState == "Playing" then
+			_G.MouseFree = false
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+		end
+		-- Auto-unfreeze enemies when dev panel closes
+		if freezeOn and DevFreezeEvent then
+			freezeOn = false
+			DevFreezeEvent:FireServer()
+			-- Sync button visual
+			freezeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+			freezeBtn.Text = "Freeze Enemies"
+		end
 	end
 end
 

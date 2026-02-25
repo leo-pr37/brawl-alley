@@ -64,13 +64,20 @@ local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
 	if not motor then return nil end
 	duration = math.max(duration or 0.1, 0.06)
 
-	-- Auto-adapt: preserve the rig's base position, apply animation rotation.
-	-- This lets R6-authored animations work on R15 rigs automatically.
+	-- Auto-adapt: compute rotation delta between animation target and R6 rest
+	-- pose, then apply that delta on top of the rig's actual base C0. This lets
+	-- R6-authored animations work correctly on R15 rigs whose base C0 may include
+	-- different positions or orientations.
 	local model = motor.Parent and motor.Parent.Parent
 	if model and basePoses[model] and basePoses[model][motor.Name] then
 		local baseC0 = basePoses[model][motor.Name]
-		local rotOnly = targetC0 - targetC0.Position
-		targetC0 = CFrame.new(baseC0.Position) * rotOnly
+		local restKey = motor.Name
+		if restKey == "Root" then restKey = "RootJoint" end
+		local restC0 = REST_POSES[restKey]
+		if restC0 then
+			local delta = restC0:Inverse() * targetC0
+			targetC0 = baseC0 * delta
+		end
 	end
 
 	easingStyle = easingStyle or Enum.EasingStyle.Sine

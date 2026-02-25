@@ -198,8 +198,8 @@ end)
 local ScreenShakeEvent = ReplicatedStorage:WaitForChild("ScreenShakeEvent", 5)
 if ScreenShakeEvent then
 	ScreenShakeEvent.OnClientEvent:Connect(function(intensity, duration)
-		shakeIntensity = math.max(shakeIntensity, intensity or 3)
-		shakeDecay = duration and (1 / (duration * 60)) or 0.05
+		shakeIntensity = math.max(shakeIntensity, (intensity or 3) * 0.4)
+		shakeDecay = duration and (1 / (duration * 60)) or 0.08
 	end)
 end
 
@@ -207,12 +207,12 @@ local EnemyHitEvent = ReplicatedStorage:WaitForChild("EnemyHitEvent", 5)
 if EnemyHitEvent then
 	EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType, sourcePos, attackType)
 		if hitType == "hit" then
-			local intensity = 1.5
+			local intensity = 0.5
 			if attackType == "HeavyAttack" then
-				intensity = 3.0
+				intensity = 1.0
 			end
 			shakeIntensity = math.max(shakeIntensity, intensity)
-			shakeDecay = 0.08
+			shakeDecay = 0.12
 		end
 	end)
 end
@@ -220,9 +220,9 @@ end
 local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent", 5)
 if DamageEvent then
 	DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
-		local intensity = wasBlocked and 1 or math.clamp(damage * 0.3, 1, 6)
+		local intensity = wasBlocked and 0.3 or math.clamp(damage * 0.12, 0.3, 2)
 		shakeIntensity = math.max(shakeIntensity, intensity)
-		shakeDecay = 0.06
+		shakeDecay = 0.1
 	end)
 end
 
