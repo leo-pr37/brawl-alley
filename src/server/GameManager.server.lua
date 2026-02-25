@@ -41,6 +41,7 @@ local ItemInteractEvent = createRemote("RemoteEvent", "ItemInteractEvent")
 local HeldItemStateEvent = createRemote("RemoteEvent", "HeldItemStateEvent")
 local BlockEvent = createRemote("RemoteEvent", "BlockEvent")
 local DodgeEvent = createRemote("RemoteEvent", "DodgeEvent")
+local TeamStatusEvent = createRemote("RemoteEvent", "TeamStatusEvent")
 
 -- Game state
 local gameState = "Lobby" -- Lobby, Playing, GameOver
@@ -63,6 +64,8 @@ local DEFAULT_DIFFICULTY = "Normal"
 local currentSelectedLevel = EnemyTypes.DefaultLevel
 local currentSelectedDifficulty = DEFAULT_DIFFICULTY
 local currentDifficultySettings = DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY]
+local MAX_TEAM_PLAYERS = 4
+local activeTeam = {}
 
 -- R15 is now handled by CharacterBuilder (shared) for NPCs
 -- and game avatar settings for player characters.
@@ -512,7 +515,7 @@ local function throwRock(player, rockPart, throwDirection, throwConfig, attackTa
 		enemyHumanoid:TakeDamage(throwConfig.ThrowDamage)
 		updateEnemyHealthBar(enemy, enemyHumanoid)
 		totalScore = totalScore + CombatConfig.ScorePerHit
-		ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
+		ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
 		if enemy.PrimaryPart then
 			local toEnemy = (enemy.PrimaryPart.Position - rockPart.Position).Unit
 			applyEnemyKnockback(enemy, toEnemy * (throwConfig.KnockbackForce or 35), 10, 0.25)
@@ -537,6 +540,9 @@ local function findNearestPlayer(position)
 	local nearest = nil
 	local nearestDist = math.huge
 	for _, player in ipairs(Players:GetPlayers()) do
+		if not activeTeam[player.UserId] then
+			continue
+		end
 		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
 			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 			if humanoid and humanoid.Health > 0 then
@@ -549,6 +555,23 @@ local function findNearestPlayer(position)
 		end
 	end
 	return nearest, nearestDist
+end
+
+local function getActiveTeamPlayers()
+	local result = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		if activeTeam[player.UserId] then
+			table.insert(result, player)
+		end
+	end
+	return result
+end
+
+local function refreshLobbyTeamStatus()
+	local playerCount = #Players:GetPlayers()
+	local activeCount = math.min(playerCount, MAX_TEAM_PLAYERS)
+	local overflow = math.max(playerCount - MAX_TEAM_PLAYERS, 0)
+	TeamStatusEvent:FireAllClients(activeCount, MAX_TEAM_PLAYERS, overflow)
 end
 
 local function countNearbyEnemies(position, radius, excludedEnemy)
@@ -807,18 +830,7 @@ local function runEnemyAI()
 							if dist > aggroRange then
 								humanoid.WalkSpeed = baseWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
-								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								if aiState then aiState.Value = "approaching" end
-								continue
-							end
-
-							if enemyTryPickupItem(enemy, humanoid) then
-								maybePlayEnemyMoveAnim(enemy, typeName, false)
-								continue
-							end
-
-							if enemyTryUseHeldItem(enemy, enemyDef, target, dist) then
-								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								continue
 							end
 
@@ -835,7 +847,6 @@ local function runEnemyAI()
 								else
 									humanoid.WalkSpeed = approachWalkSpeed
 									humanoid:MoveTo(target.HumanoidRootPart.Position)
-									maybePlayEnemyMoveAnim(enemy, typeName, true)
 									continue
 								end
 							end
@@ -846,7 +857,6 @@ local function runEnemyAI()
 							if nearbyFighters >= maxActiveFighters and dist > attackRange then
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
-								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								continue
 							end
 
@@ -863,7 +873,6 @@ local function runEnemyAI()
 							end
 
 							if dist <= attackRange then
-								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								-- Attack with combo system
 								local lastAtk = data:FindFirstChild("LastAttack")
 								local comboStepVal = data:FindFirstChild("ComboStep")
@@ -900,7 +909,6 @@ local function runEnemyAI()
 							else
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(target.HumanoidRootPart.Position)
-								maybePlayEnemyMoveAnim(enemy, typeName, true)
 							end
 						end
 					end
@@ -908,6 +916,27 @@ local function runEnemyAI()
 			end
 		end
 		task.wait(0.15)
+	end
+end
+
+local function runEnemyLocomotion()
+	while gameState == "Playing" do
+		for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+			if enemy:IsA("Model") and enemy.PrimaryPart then
+				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+				local data = enemy:FindFirstChild("EnemyData")
+				if humanoid and humanoid.Health > 0 and data then
+					local taunting = data:FindFirstChild("IsTaunting")
+					local comboStep = data:FindFirstChild("ComboStep")
+					if (not taunting or not taunting.Value) and (not comboStep or comboStep.Value == 0) then
+						local typeName = data:FindFirstChild("Type") and data.Type.Value or "Thug"
+						local isMoving = humanoid.MoveDirection.Magnitude > 0.05
+						AnimationManager.PlayEnemyLocomotion(enemy, typeName, isMoving)
+					end
+				end
+			end
+		end
+		task.wait(0.1)
 	end
 end
 
@@ -948,10 +977,11 @@ local function cleanupGame()
 	totalScore = 0
 	playerScores = {}
 	playerDeaths = {}
+	activeTeam = {}
 end
 
 local function checkAllPlayersDead()
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, player in ipairs(getActiveTeamPlayers()) do
 		if player.Character then
 			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 			if humanoid and humanoid.Health > 0 then
@@ -983,13 +1013,27 @@ local function startGame(levelKey, difficultyKey)
 
 	-- Respawn all players at level-specific spawn
 	local baseSpawnPos = ArenaBuilder.GetPlayerSpawn(currentSelectedLevel)
-	for index, player in ipairs(Players:GetPlayers()) do
+	local slotOffsets = {
+		Vector3.new(-4, 0, 2),
+		Vector3.new(4, 0, 2),
+		Vector3.new(-4, 0, -2),
+		Vector3.new(4, 0, -2),
+	}
+	activeTeam = {}
+	local allPlayers = Players:GetPlayers()
+	for index, player in ipairs(allPlayers) do
+		if index > MAX_TEAM_PLAYERS then
+			break
+		end
+		activeTeam[player.UserId] = true
+	end
+	for index, player in ipairs(getActiveTeamPlayers()) do
 		player:LoadCharacter()
 		playerDeaths[player.UserId] = false
 		local character = player.Character or player.CharacterAdded:Wait()
 		local hrp = character:WaitForChild("HumanoidRootPart", 5)
 		if hrp then
-			local slotOffset = Vector3.new((index - 1) * 3, 0, 0)
+			local slotOffset = slotOffsets[index] or Vector3.new((index - 1) * 3, 0, 0)
 			local spawnPos = baseSpawnPos + slotOffset
 			hrp.CFrame = CFrame.new(spawnPos, spawnPos + Vector3.new(0, 0, -1))
 		end
@@ -1000,6 +1044,7 @@ local function startGame(levelKey, difficultyKey)
 
 	-- Start AI loop in separate thread
 	task.spawn(runEnemyAI)
+	task.spawn(runEnemyLocomotion)
 	task.spawn(runGroundItemSpawner)
 	spawnGroundItem()
 end
@@ -1024,6 +1069,7 @@ end
 ------------------------------------------------------------
 AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, attackDirection)
 	if gameState ~= "Playing" then return end
+	if not activeTeam[player.UserId] then return end
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
 	if heldItems[player.UserId] then return end
 
@@ -1094,12 +1140,13 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 
 	if hitSomething then
 		totalScore = totalScore + CombatConfig.ScorePerHit
-		ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
+		ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
 	end
 end)
 
 ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 	if gameState ~= "Playing" then return end
+	if not activeTeam[player.UserId] then return end
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
 	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
@@ -1165,7 +1212,7 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 			)
 			if didHit then
 				totalScore = totalScore + CombatConfig.ScorePerHit
-				ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
+				ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
 			end
 		elseif held.Type == "Rock" then
 			heldItems[player.UserId] = nil
@@ -1206,6 +1253,7 @@ end)
 -- PLAYER DEATH TRACKING
 ------------------------------------------------------------
 Players.PlayerAdded:Connect(function(player)
+	refreshLobbyTeamStatus()
 	player.CharacterAdded:Connect(function(character)
 		clearHeldItem(player)
 
@@ -1228,7 +1276,7 @@ Players.PlayerAdded:Connect(function(player)
 			PlayerDiedEvent:FireClient(player)
 
 			task.wait(0.5)
-			if gameState == "Playing" and checkAllPlayersDead() then
+			if gameState == "Playing" and activeTeam[player.UserId] and checkAllPlayersDead() then
 				endGame()
 			end
 		end)
@@ -1237,8 +1285,13 @@ end)
 
 Players.PlayerRemoving:Connect(function(player)
 	clearHeldItem(player)
+	activeTeam[player.UserId] = nil
 	heldItems[player.UserId] = nil
 	itemUseCooldowns[player.UserId] = nil
+	refreshLobbyTeamStatus()
+	if gameState == "Playing" and checkAllPlayersDead() then
+		endGame()
+	end
 end)
 
 RequestGameStartEvent.OnServerEvent:Connect(function(player, levelKey, difficultyKey)
@@ -1256,6 +1309,7 @@ end)
 
 -- Handle block state from client
 BlockEvent.OnServerEvent:Connect(function(player, isBlocking)
+	if gameState == "Playing" and not activeTeam[player.UserId] then return end
 	if player.Character then
 		local bv = player.Character:FindFirstChild("IsBlocking")
 		if bv then
@@ -1266,6 +1320,7 @@ end)
 
 -- Handle dodge from client
 DodgeEvent.OnServerEvent:Connect(function(player, direction)
+	if gameState == "Playing" and not activeTeam[player.UserId] then return end
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
 	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
@@ -1427,6 +1482,7 @@ DevSpawnWaveEvent.OnServerEvent:Connect(function(player)
 		gameState = "Playing"
 		startNextWave()
 		task.spawn(runEnemyAI)
+		task.spawn(runEnemyLocomotion)
 	end
 end)
 
@@ -1456,4 +1512,5 @@ local origRunEnemyAI = runEnemyAI
 -- INIT
 ------------------------------------------------------------
 ArenaBuilder.Build(arenaFolder, currentSelectedLevel)
+refreshLobbyTeamStatus()
 print("[BrawlAlley] Arena built. Waiting for players...")
