@@ -10,6 +10,8 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
 
+local UserInputService = game:GetService("UserInputService")
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -318,6 +320,10 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 		gameOverScreen.Visible = false
 		gameOverScreen.BackgroundTransparency = 1
 
+		-- Re-lock mouse for gameplay
+		_G.MouseFree = false
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+
 		-- Reset UI
 		currentScore = 0
 		scoreLabel.Text = "SCORE: 0"
@@ -346,6 +352,11 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 		gameOverScreen.Visible = true
 		gameOverScreen.BackgroundTransparency = 0.3
 		TweenService:Create(gameOverScreen, TweenInfo.new(1), {BackgroundTransparency = 0.3}):Play()
+
+		-- Unlock mouse so player can click Play Again
+		_G.MouseFree = true
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		UserInputService.MouseIconEnabled = true
 	end
 end)
 

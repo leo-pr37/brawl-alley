@@ -341,21 +341,6 @@ createButton("Spawn Next Wave", function()
 	if DevSpawnWaveEvent then DevSpawnWaveEvent:FireServer() end
 end)
 
-createSeparator()
-
--- === CONTROLS REFERENCE ===
-createHeader("CONTROLS REFERENCE")
-createTextBlock([[WASD — Move
-Left Click — Light Attack
-Hold Left Click — Heavy Attack
-Right Click — Block
-Shift / Q — Dodge
-F9 / ` — Toggle Dev Panel
-
-Light combo: Click x4
-Combo 4 = Uppercut (with jump)
-Heavy = Hold click > 0.4s]])
-
 ------------------------------------------------------------
 -- TOGGLE LOGIC
 ------------------------------------------------------------
@@ -364,10 +349,13 @@ local function togglePanel()
 	panel.Visible = panelOpen
 
 	if panelOpen then
-		-- Unlock mouse so buttons are clickable
+		-- Unlock mouse so buttons are clickable (flag stops camera from re-locking)
+		_G.MouseFree = true
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		UserInputService.MouseIconEnabled = true
 	else
 		-- Re-lock mouse for camera control
+		_G.MouseFree = false
 		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
 	end
 end

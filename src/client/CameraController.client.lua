@@ -57,7 +57,7 @@ end)
 
 -- Keep mouse locked
 UserInputService.WindowFocused:Connect(function()
-	if initialized then
+	if initialized and not _G.MouseFree then
 		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
 	end
 end)
@@ -80,8 +80,11 @@ RunService.RenderStepped:Connect(function(dt)
 	if camera.CameraType ~= Enum.CameraType.Scriptable then
 		camera.CameraType = Enum.CameraType.Scriptable
 	end
-	if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	-- Only lock mouse when UI doesn't need it
+	if not _G.MouseFree then
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+		end
 	end
 
 	-- Calculate camera position behind and above player
