@@ -429,6 +429,10 @@ local function runEnemyAI()
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
 				local data = enemy:FindFirstChild("EnemyData")
 				if humanoid and humanoid.Health > 0 and data then
+					-- Skip if enemies are frozen
+					if enemiesFrozen then
+						continue
+					end
 					-- Skip if currently taunting
 					local taunting = data:FindFirstChild("IsTaunting")
 					if taunting and taunting.Value then
@@ -766,6 +770,172 @@ DodgeEvent.OnServerEvent:Connect(function(player, direction)
 	bv.Parent = player.Character.HumanoidRootPart
 	game:GetService("Debris"):AddItem(bv, 0.3)
 end)
+
+------------------------------------------------------------
+-- DEV PANEL REMOTE EVENTS
+------------------------------------------------------------
+local DevFreezeEvent = createRemote("RemoteEvent", "DevFreezeEnemies")
+local DevKillAllEvent = createRemote("RemoteEvent", "DevKillAll")
+local DevSpawnEnemyEvent = createRemote("RemoteEvent", "DevSpawnEnemy")
+local DevTriggerTauntEvent = createRemote("RemoteEvent", "DevTriggerTaunt")
+local DevTriggerComboEvent = createRemote("RemoteEvent", "DevTriggerCombo")
+local DevGodModeEvent = createRemote("RemoteEvent", "DevGodMode")
+local DevSpawnWaveEvent = createRemote("RemoteEvent", "DevSpawnWave")
+local DevPlayAnimEvent = createRemote("RemoteEvent", "DevPlayAnim")
+
+local enemiesFrozen = false
+local godModePlayers = {}
+
+DevFreezeEvent.OnServerEvent:Connect(function(player)
+	enemiesFrozen = not enemiesFrozen
+	-- Stop/resume all enemy movement
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") then
+			local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				if enemiesFrozen then
+					humanoid.WalkSpeed = 0
+					-- Set taunting to block AI actions
+					local data = enemy:FindFirstChild("EnemyData")
+					if data then
+						local t = data:FindFirstChild("IsTaunting")
+						if t then t.Value = true end
+					end
+				else
+					local data = enemy:FindFirstChild("EnemyData")
+					local typeName = data and data:FindFirstChild("Type") and data.Type.Value or "Thug"
+					local enemyDef = EnemyTypes.Types[typeName]
+					if enemyDef then
+						humanoid.WalkSpeed = enemyDef.WalkSpeed
+					end
+					if data then
+						local t = data:FindFirstChild("IsTaunting")
+						if t then t.Value = false end
+					end
+				end
+			end
+		end
+	end
+end)
+
+DevKillAllEvent.OnServerEvent:Connect(function(player)
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") then
+			local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				humanoid.Health = 0
+			end
+		end
+	end
+end)
+
+DevSpawnEnemyEvent.OnServerEvent:Connect(function(player, typeName)
+	if not EnemyTypes.Types[typeName] then return end
+	local enemy = spawnEnemy(typeName, currentWave > 0 and currentWave or 1)
+	if enemy then
+		local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.WalkSpeed = 0 -- stands still
+		end
+		local data = enemy:FindFirstChild("EnemyData")
+		if data then
+			local t = data:FindFirstChild("IsTaunting")
+			if t then t.Value = true end -- block AI
+		end
+	end
+end)
+
+local function findNearestEnemyToPlayer(player)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return nil end
+	local pos = player.Character.HumanoidRootPart.Position
+	local nearest, nearestDist = nil, math.huge
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy.PrimaryPart then
+			local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				local dist = (enemy.PrimaryPart.Position - pos).Magnitude
+				if dist < nearestDist then
+					nearest = enemy
+					nearestDist = dist
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+DevTriggerTauntEvent.OnServerEvent:Connect(function(player)
+	local enemy = findNearestEnemyToPlayer(player)
+	if not enemy then return end
+	local data = enemy:FindFirstChild("EnemyData")
+	if not data then return end
+	local typeName = data:FindFirstChild("Type") and data.Type.Value or "Thug"
+	local enemyDef = EnemyTypes.Types[typeName]
+	if enemyDef then
+		doEnemyTaunt(enemy, enemyDef, data)
+	end
+end)
+
+DevTriggerComboEvent.OnServerEvent:Connect(function(player)
+	local enemy = findNearestEnemyToPlayer(player)
+	if not enemy then return end
+	local data = enemy:FindFirstChild("EnemyData")
+	if not data then return end
+	local typeName = data:FindFirstChild("Type") and data.Type.Value or "Thug"
+	local enemyDef = EnemyTypes.Types[typeName]
+	if not enemyDef then return end
+	local target = player.Character
+	if not target then return end
+	local comboHits = enemyDef.ComboHits or 1
+	for i = 1, comboHits do
+		task.delay((i - 1) * (enemyDef.ComboCooldown or 0.5), function()
+			doEnemyComboHit(enemy, enemyDef, data, target, i)
+		end)
+	end
+end)
+
+DevGodModeEvent.OnServerEvent:Connect(function(player)
+	godModePlayers[player.UserId] = not godModePlayers[player.UserId]
+end)
+
+DevSpawnWaveEvent.OnServerEvent:Connect(function(player)
+	if gameState == "Playing" then
+		-- Kill remaining enemies first
+		for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+			if enemy:IsA("Model") then
+				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+				if humanoid then humanoid.Health = 0 end
+			end
+		end
+	elseif gameState ~= "Playing" then
+		-- Force start game
+		gameState = "Playing"
+		startNextWave()
+		task.spawn(runEnemyAI)
+	end
+end)
+
+-- Patch damage to respect god mode
+local originalTakeDamage = nil -- We'll intercept via the DamageEvent response
+
+-- Override: check god mode in enemy AI combat
+local _origRunEnemyAI = runEnemyAI
+-- We intercept god mode by checking in the humanoid health changed
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function(char)
+		local humanoid = char:WaitForChild("Humanoid")
+		local lastHealth = humanoid.MaxHealth
+		humanoid.HealthChanged:Connect(function(newHealth)
+			if godModePlayers[p.UserId] and newHealth < lastHealth then
+				humanoid.Health = humanoid.MaxHealth
+			end
+			lastHealth = newHealth
+		end)
+	end)
+end)
+
+-- Also handle frozen enemies in the AI loop by patching
+local origRunEnemyAI = runEnemyAI
 
 ------------------------------------------------------------
 -- INIT

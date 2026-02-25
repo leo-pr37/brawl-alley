@@ -24,8 +24,8 @@ local MOUSE_SENSITIVITY = 0.003    -- mouse sensitivity for rotation
 -- State
 local yaw = 0          -- horizontal rotation (radians)
 local pitch = -0.15     -- vertical rotation (radians), slightly looking down
-local PITCH_MIN = -1.2
-local PITCH_MAX = 0.6
+local PITCH_MIN = -0.61  -- ~-35 degrees (looking up) — prevents camera clipping through floor
+local PITCH_MAX = 1.05   -- ~+60 degrees (looking down)
 local currentCameraPos = nil
 local currentLookAt = nil
 local initialized = false
@@ -134,6 +134,23 @@ RunService.RenderStepped:Connect(function(dt)
 	-- Smooth follow with cinematic lag
 	currentCameraPos = currentCameraPos:Lerp(targetCameraPos, CAMERA_SMOOTHING)
 	currentLookAt = currentLookAt:Lerp(targetLookAt, CAMERA_LOOK_SMOOTHING)
+
+	-- Raycast anti-clip: if camera would be inside geometry, push it forward
+	local rayOrigin = playerPos + Vector3.new(0, CAMERA_HEIGHT, 0)
+	local rayDir = currentCameraPos - rayOrigin
+	local rayParams = RaycastParams.new()
+	rayParams.FilterDescendantsInstances = {char}
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local rayResult = workspace:Raycast(rayOrigin, rayDir, rayParams)
+	if rayResult then
+		-- Place camera slightly in front of the hit point (0.5 stud buffer)
+		local hitDist = (rayResult.Position - rayOrigin).Magnitude
+		local fullDist = rayDir.Magnitude
+		if hitDist < fullDist then
+			local safePos = rayOrigin + rayDir.Unit * math.max(hitDist - 0.5, 1)
+			currentCameraPos = safePos
+		end
+	end
 
 	camera.CFrame = CFrame.new(currentCameraPos + shakeOffset, currentLookAt + shakeOffset)
 end)
