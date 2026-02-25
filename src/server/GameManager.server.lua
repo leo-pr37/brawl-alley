@@ -33,6 +33,7 @@ local RequestRestartEvent = createRemote("RemoteEvent", "RequestRestartEvent")
 local SpawnEffectEvent = createRemote("RemoteEvent", "SpawnEffectEvent")
 local EnemyAnimEvent = createRemote("RemoteEvent", "EnemyAnimEvent")
 local ScreenShakeEvent = createRemote("RemoteEvent", "ScreenShakeEvent")
+local ComicBubbleEvent = createRemote("RemoteEvent", "ComicBubbleEvent")
 
 -- Game state
 local gameState = "Lobby" -- Lobby, Playing, GameOver
@@ -55,6 +56,26 @@ arenaFolder.Parent = workspace
 local ARENA_WIDTH = 80
 local ARENA_DEPTH = 50
 local ARENA_CENTER = Vector3.new(0, 0, 0)
+
+------------------------------------------------------------
+-- SPAWN POINTS (edges/entrances of arena)
+------------------------------------------------------------
+local SPAWN_POINTS = {
+	-- Left alley mouth
+	{pos = Vector3.new(-ARENA_WIDTH/2 + 3, 3, -10), name = "LeftAlley1"},
+	{pos = Vector3.new(-ARENA_WIDTH/2 + 3, 3, 10), name = "LeftAlley2"},
+	-- Right alley mouth
+	{pos = Vector3.new(ARENA_WIDTH/2 - 3, 3, -10), name = "RightAlley1"},
+	{pos = Vector3.new(ARENA_WIDTH/2 - 3, 3, 10), name = "RightAlley2"},
+	-- Back wall (behind dumpsters/crates)
+	{pos = Vector3.new(-20, 3, -ARENA_DEPTH/2 + 3), name = "BackLeft"},
+	{pos = Vector3.new(15, 3, -ARENA_DEPTH/2 + 3), name = "BackRight"},
+	-- Front entrance
+	{pos = Vector3.new(0, 3, ARENA_DEPTH/2 - 3), name = "FrontCenter"},
+	-- Rooftop drop points (spawn higher, they fall down)
+	{pos = Vector3.new(-25, 12, -5), name = "RooftopLeft"},
+	{pos = Vector3.new(30, 12, 5), name = "RooftopRight"},
+}
 
 ------------------------------------------------------------
 -- ARENA BUILDING
@@ -99,7 +120,7 @@ local function buildArena()
 	backWall.Material = Enum.Material.Brick
 	backWall.Parent = arenaFolder
 
-	-- Front wall (lower, like a curb/barrier)
+	-- Front wall
 	local frontWall = Instance.new("Part")
 	frontWall.Name = "FrontWall"
 	frontWall.Size = Vector3.new(ARENA_WIDTH + 20, wallHeight, wallThickness)
@@ -167,7 +188,6 @@ local function buildArena()
 			light.Range = 30
 			light.Parent = lamp
 
-			-- Lamp head
 			local head = Instance.new("Part")
 			head.Name = lampName .. "Head"
 			head.Size = Vector3.new(1.5, 0.5, 1.5)
@@ -194,23 +214,10 @@ end
 -- ENEMY SPAWNING & AI
 ------------------------------------------------------------
 local function getRandomSpawnPos()
-	-- Spawn from edges of the arena
-	local side = math.random(1, 4)
-	local x, z
-	if side == 1 then -- left
-		x = -ARENA_WIDTH/2 + 2
-		z = math.random(-ARENA_DEPTH/2 + 5, ARENA_DEPTH/2 - 5)
-	elseif side == 2 then -- right
-		x = ARENA_WIDTH/2 - 2
-		z = math.random(-ARENA_DEPTH/2 + 5, ARENA_DEPTH/2 - 5)
-	elseif side == 3 then -- back
-		x = math.random(-ARENA_WIDTH/2 + 5, ARENA_WIDTH/2 - 5)
-		z = -ARENA_DEPTH/2 + 2
-	else -- front
-		x = math.random(-ARENA_WIDTH/2 + 5, ARENA_WIDTH/2 - 5)
-		z = ARENA_DEPTH/2 - 2
-	end
-	return Vector3.new(x, 3, z)
+	local sp = SPAWN_POINTS[math.random(1, #SPAWN_POINTS)]
+	-- Add slight randomness so enemies don't stack
+	local jitter = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
+	return sp.pos + jitter
 end
 
 local function findNearestPlayer(position)
@@ -293,6 +300,17 @@ local function spawnEnemy(typeName, waveNum)
 	isTaunting.Value = false
 	isTaunting.Parent = enemyData
 
+	-- State: "approaching" until first taunt, then "fighting"
+	local aiState = Instance.new("StringValue")
+	aiState.Name = "AIState"
+	aiState.Value = "approaching" -- approaching, fighting
+	aiState.Parent = enemyData
+
+	local hasFirstTaunted = Instance.new("BoolValue")
+	hasFirstTaunted.Name = "HasFirstTaunted"
+	hasFirstTaunted.Value = false
+	hasFirstTaunted.Parent = enemyData
+
 	-- Health bar
 	Utils.CreateHealthBar(model, maxHP)
 
@@ -333,11 +351,9 @@ local function doEnemyTaunt(enemy, enemyDef, data)
 	local taunting = data:FindFirstChild("IsTaunting")
 	if taunting then taunting.Value = true end
 
-	-- Play taunt animation + text on server (replicates via remote)
 	local typeName = data.Type.Value
 	EnemyAnimEvent:FireAllClients(enemy, "taunt", typeName)
 
-	-- Play the actual joint animation on server too
 	if typeName == "Thug" then
 		AnimationManager.PlayThugTaunt(enemy)
 	elseif typeName == "Brawler" then
@@ -352,7 +368,6 @@ local function doEnemyTaunt(enemy, enemyDef, data)
 	local lastTauntVal = data:FindFirstChild("LastTaunt")
 	if lastTauntVal then lastTauntVal.Value = tick() end
 
-	-- Taunt duration before resuming AI
 	local tauntDuration = (typeName == "Brawler") and 1.8 or 1.2
 	task.delay(tauntDuration, function()
 		if taunting and taunting.Parent then
@@ -395,7 +410,6 @@ local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 	local hitPlayer = Players:GetPlayerFromCharacter(target)
 	if hitPlayer then
 		DamageEvent:FireClient(hitPlayer, dmg, isBlocking, enemy.PrimaryPart.Position)
-		-- Screen shake on heavy hits (Brawler combo finishers, etc.)
 		if dmgMult >= 1.3 then
 			ScreenShakeEvent:FireClient(hitPlayer, dmgMult * 5, 0.3)
 		end
@@ -425,67 +439,91 @@ local function runEnemyAI()
 					local enemyDef = EnemyTypes.Types[typeName]
 					if enemyDef then
 						local target, dist = findNearestPlayer(enemy.PrimaryPart.Position)
-						if target and dist <= enemyDef.AggroRange then
-							-- Check for taunt opportunity
-							local lastTauntVal = data:FindFirstChild("LastTaunt")
+						if target then
+							local aiState = data:FindFirstChild("AIState")
+							local hasFirstTaunted = data:FindFirstChild("HasFirstTaunted")
 							local now = tick()
-							local tauntCooldown = enemyDef.TauntCooldown or 8
-							if lastTauntVal and (now - lastTauntVal.Value) >= tauntCooldown then
-								if math.random() < (enemyDef.TauntChance or 0.2) then
+
+							-- APPROACHING STATE: walk toward player, do first taunt at medium range
+							if aiState and aiState.Value == "approaching" then
+								-- First taunt when at medium range (15-25 studs)
+								if hasFirstTaunted and not hasFirstTaunted.Value and dist <= 25 and dist >= 8 then
+									hasFirstTaunted.Value = true
 									doEnemyTaunt(enemy, enemyDef, data)
+									continue
+								end
+
+								-- If close enough, switch to fighting
+								if dist <= enemyDef.AttackRange + 2 then
+									if aiState then aiState.Value = "fighting" end
+								else
+									-- Keep walking toward player
+									humanoid:MoveTo(target.HumanoidRootPart.Position)
 									continue
 								end
 							end
 
-							if dist <= enemyDef.AttackRange then
-								-- Attack with combo system
-								local lastAtk = data:FindFirstChild("LastAttack")
-								local comboStepVal = data:FindFirstChild("ComboStep")
-								local lastComboVal = data:FindFirstChild("LastComboTime")
-
-								if lastAtk and comboStepVal then
-									local comboHits = enemyDef.ComboHits or 1
-									local comboCooldown = enemyDef.ComboCooldown or 0.5
-									local currentStep = comboStepVal.Value
-
-									-- Check if we're mid-combo or starting fresh
-									if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) < comboCooldown + 0.3 then
-										-- Continue combo if enough time passed
-										if (now - lastComboVal.Value) >= comboCooldown then
-											currentStep = currentStep + 1
-											if currentStep > comboHits then
-												-- Combo finished, reset with full cooldown
-												comboStepVal.Value = 0
-												lastAtk.Value = now
-											else
-												comboStepVal.Value = currentStep
-												lastComboVal.Value = now
-												doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
-											end
-										end
-									elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
-										-- Start new combo
-										comboStepVal.Value = 1
-										if lastComboVal then lastComboVal.Value = now end
-										lastAtk.Value = now
-										doEnemyComboHit(enemy, enemyDef, data, target, 1)
-									else
-										-- Combo timed out, reset
-										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
-											comboStepVal.Value = 0
-										end
+							-- FIGHTING STATE: normal combat AI with high taunt chance
+							if dist <= enemyDef.AggroRange then
+								-- Check for taunt opportunity (higher chance: 50-70%)
+								local lastTauntVal = data:FindFirstChild("LastTaunt")
+								local tauntCooldown = enemyDef.TauntCooldown or 8
+								-- Reduce cooldown for more frequent taunts (4-8 seconds)
+								local actualCooldown = math.max(4, tauntCooldown * 0.6)
+								if lastTauntVal and (now - lastTauntVal.Value) >= actualCooldown then
+									-- Much higher taunt chance
+									local tauntChance = math.max(0.5, (enemyDef.TauntChance or 0.3) * 2)
+									if math.random() < tauntChance then
+										doEnemyTaunt(enemy, enemyDef, data)
+										continue
 									end
 								end
-							else
-								-- Move toward target
-								humanoid:MoveTo(target.HumanoidRootPart.Position)
+
+								if dist <= enemyDef.AttackRange then
+									-- Attack with combo system
+									local lastAtk = data:FindFirstChild("LastAttack")
+									local comboStepVal = data:FindFirstChild("ComboStep")
+									local lastComboVal = data:FindFirstChild("LastComboTime")
+
+									if lastAtk and comboStepVal then
+										local comboHits = enemyDef.ComboHits or 1
+										local comboCooldown = enemyDef.ComboCooldown or 0.5
+										local currentStep = comboStepVal.Value
+
+										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) < comboCooldown + 0.3 then
+											if (now - lastComboVal.Value) >= comboCooldown then
+												currentStep = currentStep + 1
+												if currentStep > comboHits then
+													comboStepVal.Value = 0
+													lastAtk.Value = now
+												else
+													comboStepVal.Value = currentStep
+													lastComboVal.Value = now
+													doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
+												end
+											end
+										elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
+											comboStepVal.Value = 1
+											if lastComboVal then lastComboVal.Value = now end
+											lastAtk.Value = now
+											doEnemyComboHit(enemy, enemyDef, data, target, 1)
+										else
+											if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
+												comboStepVal.Value = 0
+											end
+										end
+									end
+								else
+									-- Move toward target
+									humanoid:MoveTo(target.HumanoidRootPart.Position)
+								end
 							end
 						end
 					end
 				end
 			end
 		end
-		task.wait(0.15) -- AI tick rate (slightly faster for combo responsiveness)
+		task.wait(0.15)
 	end
 end
 
@@ -498,13 +536,13 @@ function startNextWave()
 	currentWave = currentWave + 1
 	GameStateEvent:FireAllClients("WaveStart", currentWave)
 
-	task.wait(3) -- Brief pause before spawning
+	task.wait(3)
 
 	local waveDef = EnemyTypes.GetWave(currentWave)
 	for _, group in ipairs(waveDef) do
 		for i = 1, group.Count do
 			spawnEnemy(group.Type, currentWave)
-			task.wait(0.5) -- Stagger spawns
+			task.wait(0.8) -- Slightly more stagger so enemies approach in sequence
 		end
 	end
 end
@@ -559,7 +597,6 @@ local function endGame()
 	gameState = "GameOver"
 	GameStateEvent:FireAllClients("GameOver", totalScore)
 
-	-- Clean up enemies
 	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 		enemy:Destroy()
 	end
@@ -588,31 +625,49 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 	for _, enemy in ipairs(hitEnemies) do
 		local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
 		if enemyHumanoid and enemyHumanoid.Health > 0 then
-			-- Direction check: only hit enemies roughly in front
 			local toEnemy = (enemy.PrimaryPart.Position - charPos).Unit
 			local facing = attackDirection or player.Character.HumanoidRootPart.CFrame.LookVector
 			local dot = toEnemy:Dot(facing)
-			if dot > 0.2 then -- roughly in front (wide arc for beat-em-up feel)
+			if dot > 0.2 then
 				local dmg = config.Damage
 				enemyHumanoid:TakeDamage(dmg)
 				hitSomething = true
 
-				-- Knockback
-				local knockDir = toEnemy * config.KnockbackForce
+				-- Knockback — more dramatic for heavy hits
+				local knockMult = 1.0
+				if attackType == "HeavyAttack" then
+					knockMult = 1.5
+				end
+				local knockDir = toEnemy * config.KnockbackForce * knockMult
 				local data = enemy:FindFirstChild("EnemyData")
 				local typeName = data and data:FindFirstChild("Type") and data.Type.Value or "Thug"
 				local resist = EnemyTypes.Types[typeName] and EnemyTypes.Types[typeName].KnockbackResist or 0
 				local actualKnock = knockDir * (1 - resist)
-				if enemy.PrimaryPart then
-					local bv = Instance.new("BodyVelocity")
-					bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
-					bv.Velocity = Vector3.new(actualKnock.X, 0, actualKnock.Z)
-					bv.Parent = enemy.PrimaryPart
-					game:GetService("Debris"):AddItem(bv, 0.2)
+
+				-- Heavy hits: add upward force for dramatic stagger
+				local yForce = 0
+				if attackType == "HeavyAttack" then
+					yForce = 15
 				end
 
+				if enemy.PrimaryPart then
+					local bv = Instance.new("BodyVelocity")
+					bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+					bv.Velocity = Vector3.new(actualKnock.X, yForce, actualKnock.Z)
+					bv.Parent = enemy.PrimaryPart
+					game:GetService("Debris"):AddItem(bv, 0.25)
+				end
+
+				-- Fire comic bubble event to all clients
+				-- Determine bubble type
+				local bubbleType = "light"
+				if attackType == "HeavyAttack" then
+					bubbleType = "heavy"
+				end
+				ComicBubbleEvent:FireAllClients(enemy, bubbleType, enemy.PrimaryPart.Position)
+
 				-- Notify all clients of hit for visual effects
-				EnemyHitEvent:FireAllClients(enemy, "hit", charPos)
+				EnemyHitEvent:FireAllClients(enemy, "hit", charPos, attackType)
 
 				-- Update health bar
 				local hb = enemy:FindFirstChild("HealthBar")
@@ -630,7 +685,6 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 	end
 
 	if hitSomething then
-		-- Award hit score
 		totalScore = totalScore + CombatConfig.ScorePerHit
 		ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
 	end
@@ -641,13 +695,11 @@ end)
 ------------------------------------------------------------
 Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
-		-- Add blocking value
 		local blockVal = Instance.new("BoolValue")
 		blockVal.Name = "IsBlocking"
 		blockVal.Value = false
 		blockVal.Parent = character
 
-		-- Add dodge iframe value
 		local dodgeVal = Instance.new("BoolValue")
 		dodgeVal.Name = "IsDodging"
 		dodgeVal.Value = false
@@ -665,9 +717,8 @@ Players.PlayerAdded:Connect(function(player)
 		end)
 	end)
 
-	-- Auto-start game when first player joins lobby
 	if gameState == "Lobby" then
-		task.wait(5) -- Give a few seconds to load
+		task.wait(5)
 		if gameState == "Lobby" and #Players:GetPlayers() > 0 then
 			startGame()
 		end
@@ -709,7 +760,6 @@ DodgeEvent.OnServerEvent:Connect(function(player, direction)
 		end)
 	end
 
-	-- Apply dodge velocity
 	local bv = Instance.new("BodyVelocity")
 	bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
 	bv.Velocity = direction * CombatConfig.DodgeDistance
@@ -723,7 +773,6 @@ end)
 buildArena()
 print("[BrawlAlley] Arena built. Waiting for players...")
 
--- If players already in game (studio testing), start immediately
 if #Players:GetPlayers() > 0 then
 	task.wait(3)
 	if gameState == "Lobby" then

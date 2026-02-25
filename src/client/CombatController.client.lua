@@ -2,22 +2,26 @@
 	CombatController (Client)
 	Handles player input for combat: attacks, blocking, dodging.
 	Manages combo state and communicates with server.
+	Includes exaggerated attack animations (uppercut jump, heavy lunge).
 ]]
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
+local ComicBubbles = require(Shared:WaitForChild("ComicBubbles"))
 
 -- Remote events
 local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
 local BlockEvent = ReplicatedStorage:WaitForChild("BlockEvent")
 local DodgeEvent = ReplicatedStorage:WaitForChild("DodgeEvent")
+local ComicBubbleEvent = ReplicatedStorage:WaitForChild("ComicBubbleEvent", 10)
 
 -- Combat state
 local comboCount = 0
@@ -48,7 +52,6 @@ local function isAlive()
 	return h and h.Health > 0
 end
 
--- Get the direction the player is looking
 local function getLookDirection()
 	local hrp = getHumanoidRootPart()
 	if hrp then
@@ -57,21 +60,55 @@ local function getLookDirection()
 	return Vector3.new(0, 0, -1)
 end
 
+-- Exaggerated uppercut: player jumps up
+local function doUppercutJump()
+	local char = getCharacter()
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	-- Quick upward impulse for visual jump
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(0, math.huge, 0)
+	bv.Velocity = Vector3.new(0, 30, 0)
+	bv.Parent = hrp
+	game:GetService("Debris"):AddItem(bv, 0.15)
+end
+
+-- Exaggerated heavy punch: forward lunge
+local function doHeavyLunge()
+	local char = getCharacter()
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	local dir = hrp.CFrame.LookVector
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
+	bv.Velocity = dir * 25
+	bv.Parent = hrp
+	game:GetService("Debris"):AddItem(bv, 0.15)
+end
+
 -- Attack visual feedback using AnimationManager
 local function playAttackAnimation(attackType)
 	local char = getCharacter()
 	if not char then return end
 
-	-- Set up joints on player character if not done yet
 	if not AnimationManager.HasJoints(char) then
 		AnimationManager.SetupJoints(char, 1)
 	end
 
 	if attackType == "HeavyAttack" then
 		AnimationManager.PlayHeavyPunch(char)
+		doHeavyLunge()
 	else
 		-- Light attack uses combo index for varied animations
 		AnimationManager.PlayLightPunch(char, comboCount)
+		-- Uppercut on combo 4
+		if comboCount == 4 then
+			doUppercutJump()
+		end
 	end
 end
 
@@ -127,7 +164,6 @@ local function doDodge()
 	if now - lastDodgeTime < CombatConfig.DodgeCooldown then return end
 	lastDodgeTime = now
 
-	-- Stop blocking if dodging
 	if isBlocking then
 		isBlocking = false
 		BlockEvent:FireServer(false)
@@ -146,7 +182,6 @@ local function doDodge()
 
 	DodgeEvent:FireServer(moveDir)
 
-	-- Play dodge animation
 	local char2 = getCharacter()
 	if char2 and AnimationManager.HasJoints(char2) then
 		AnimationManager.PlayDodge(char2)
@@ -176,13 +211,11 @@ end
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 
-	-- Left click: start attack
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		mouseHoldStart = tick()
 		isHolding = true
 	end
 
-	-- Right click: block
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isBlocking = true
 		BlockEvent:FireServer(true)
@@ -192,19 +225,16 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		end
 	end
 
-	-- Shift: dodge
 	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
 		doDodge()
 	end
 
-	-- Q: dodge alternative
 	if input.KeyCode == Enum.KeyCode.Q then
 		doDodge()
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(input, processed)
-	-- Left click released: determine attack type
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		if isHolding then
 			isHolding = false
@@ -217,7 +247,6 @@ UserInputService.InputEnded:Connect(function(input, processed)
 		end
 	end
 
-	-- Right click released: stop blocking
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isBlocking = false
 		BlockEvent:FireServer(false)
@@ -228,12 +257,11 @@ UserInputService.InputEnded:Connect(function(input, processed)
 	end
 end)
 
--- Blocking visual
+-- Blocking visual + combo reset + charge indicator
 RunService.RenderStepped:Connect(function()
 	local char = getCharacter()
 	if not char then return end
 
-	-- Block visual indicator
 	local blockShield = char:FindFirstChild("BlockShield")
 	if isBlocking and isAlive() then
 		if not blockShield then
@@ -273,7 +301,6 @@ RunService.RenderStepped:Connect(function()
 		local holdDuration = tick() - mouseHoldStart
 		local chargeThreshold = CombatConfig.Attacks.HeavyAttack.ChargeTime
 		if holdDuration >= chargeThreshold then
-			-- Show charge ready visual
 			local hrp = char:FindFirstChild("HumanoidRootPart")
 			if hrp then
 				local glow = hrp:FindFirstChild("ChargeGlow")
@@ -302,22 +329,32 @@ end)
 -- Hit reaction when taking damage
 local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
 DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
-	if wasBlocked then return end -- no flinch when blocking
+	if wasBlocked then return end
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) and not isBlocking then
 		AnimationManager.PlayHitReaction(char)
 	end
 end)
 
+-- Listen for comic bubble events from server
+if ComicBubbleEvent then
+	ComicBubbleEvent.OnClientEvent:Connect(function(enemy, hitType, worldPos)
+		if enemy and enemy:IsA("Model") and enemy.PrimaryPart then
+			ComicBubbles.Spawn(enemy.PrimaryPart, hitType, worldPos)
+		elseif worldPos then
+			ComicBubbles.Spawn(nil, hitType, worldPos)
+		end
+	end)
+end
+
 -- Setup joints on character spawn
 player.CharacterAdded:Connect(function(character)
-	task.wait(0.5) -- wait for character to fully load
+	task.wait(0.5)
 	if not AnimationManager.HasJoints(character) then
 		AnimationManager.SetupJoints(character, 1)
 	end
 end)
 
--- Setup joints on current character if it exists
 if player.Character then
 	task.spawn(function()
 		task.wait(0.5)

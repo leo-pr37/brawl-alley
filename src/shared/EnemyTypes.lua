@@ -21,8 +21,8 @@ EnemyTypes.Types = {
 		ComboDamageMultipliers = {1.0, 1.2},
 		-- Taunt
 		TauntText = "You're dead meat!",
-		TauntCooldown = 8, -- minimum seconds between taunts
-		TauntChance = 0.3, -- chance to taunt when entering aggro
+		TauntCooldown = 6, -- minimum seconds between taunts
+		TauntChance = 0.6, -- high chance to taunt
 	},
 	Brawler = {
 		Name = "Brawler",
@@ -43,8 +43,8 @@ EnemyTypes.Types = {
 		ComboDamageMultipliers = {1.0, 1.3, 1.8},
 		-- Taunt
 		TauntText = "I'll crush you!",
-		TauntCooldown = 10,
-		TauntChance = 0.25,
+		TauntCooldown = 7,
+		TauntChance = 0.55,
 	},
 	Speedster = {
 		Name = "Speedster",
@@ -65,8 +65,8 @@ EnemyTypes.Types = {
 		ComboDamageMultipliers = {0.8, 0.8, 0.8, 1.5},
 		-- Taunt
 		TauntText = "Can't touch this!",
-		TauntCooldown = 6,
-		TauntChance = 0.35,
+		TauntCooldown = 5,
+		TauntChance = 0.65,
 	},
 }
 

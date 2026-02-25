@@ -409,7 +409,7 @@ task.spawn(function()
 end)
 
 -- Enemy hit effects
-EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType, sourcePos)
+EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType, sourcePos, attackType)
 	if not enemy or not enemy:IsA("Model") or not enemy.PrimaryPart then return end
 
 	if hitType == "hit" then

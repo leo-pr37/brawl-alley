@@ -1,26 +1,35 @@
 --[[
 	CameraController (Client)
-	Beat-em-up style camera: follows player from an elevated angle,
-	slightly behind and above, giving a classic arcade perspective.
+	Third-person over-the-shoulder camera (Fortnite/GTA style).
+	Mouse controls camera rotation around player.
+	Smooth follow with cinematic lag, offset to right shoulder.
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 -- Camera settings
-local CAMERA_OFFSET = Vector3.new(0, 25, 30) -- elevated behind
-local CAMERA_LOOK_OFFSET = Vector3.new(0, -2, 0) -- look slightly below center
-local CAMERA_SMOOTHING = 0.1
-local CAMERA_MODE = "Fixed" -- Fixed angle, classic beat-em-up
+local CAMERA_DISTANCE = 10        -- distance behind player
+local CAMERA_HEIGHT = 4            -- height above player
+local CAMERA_SHOULDER_OFFSET = 2   -- offset to the right (over right shoulder)
+local CAMERA_SMOOTHING = 0.12      -- lerp factor for position (lower = more lag)
+local CAMERA_LOOK_SMOOTHING = 0.15 -- lerp factor for look target
+local MOUSE_SENSITIVITY = 0.003    -- mouse sensitivity for rotation
 
+-- State
+local yaw = 0          -- horizontal rotation (radians)
+local pitch = -0.15     -- vertical rotation (radians), slightly looking down
+local PITCH_MIN = -1.2
+local PITCH_MAX = 0.6
 local currentCameraPos = nil
+local currentLookAt = nil
 local initialized = false
+local mouseLocked = false
 
 -- Screen shake state
 local shakeIntensity = 0
@@ -33,8 +42,25 @@ end
 
 local function setupCamera()
 	camera.CameraType = Enum.CameraType.Scriptable
+	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	mouseLocked = true
 	initialized = true
 end
+
+-- Mouse input for camera rotation
+UserInputService.InputChanged:Connect(function(input, processed)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		yaw = yaw - input.Delta.X * MOUSE_SENSITIVITY
+		pitch = math.clamp(pitch - input.Delta.Y * MOUSE_SENSITIVITY, PITCH_MIN, PITCH_MAX)
+	end
+end)
+
+-- Keep mouse locked
+UserInputService.WindowFocused:Connect(function()
+	if initialized then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	end
+end)
 
 RunService.RenderStepped:Connect(function(dt)
 	local char = getCharacter()
@@ -45,18 +71,51 @@ RunService.RenderStepped:Connect(function(dt)
 
 	if not initialized then
 		setupCamera()
+		-- Initialize yaw based on character facing
+		local look = hrp.CFrame.LookVector
+		yaw = math.atan2(-look.X, -look.Z)
 	end
 
 	-- Ensure camera stays scriptable
 	if camera.CameraType ~= Enum.CameraType.Scriptable then
 		camera.CameraType = Enum.CameraType.Scriptable
 	end
+	if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	end
 
-	local targetPos = hrp.Position + CAMERA_OFFSET
-	local lookAt = hrp.Position + CAMERA_LOOK_OFFSET
+	-- Calculate camera position behind and above player
+	local playerPos = hrp.Position
 
+	-- Camera orbit based on yaw/pitch
+	local cosYaw = math.cos(yaw)
+	local sinYaw = math.sin(yaw)
+	local cosPitch = math.cos(pitch)
+	local sinPitch = math.sin(pitch)
+
+	-- Direction from player to camera (behind them)
+	local cameraDir = Vector3.new(
+		sinYaw * cosPitch,
+		sinPitch,
+		cosYaw * cosPitch
+	)
+
+	-- Shoulder offset (perpendicular to look direction, on XZ plane)
+	local rightDir = Vector3.new(cosYaw, 0, -sinYaw)
+
+	local targetCameraPos = playerPos
+		+ cameraDir * CAMERA_DISTANCE
+		+ Vector3.new(0, CAMERA_HEIGHT, 0)
+		+ rightDir * CAMERA_SHOULDER_OFFSET
+
+	-- Look target: slightly ahead and above the player
+	local lookAheadDir = -cameraDir -- forward is opposite of camera direction
+	local targetLookAt = playerPos + Vector3.new(0, 1.5, 0) + Vector3.new(lookAheadDir.X, 0, lookAheadDir.Z).Unit * 3
+
+	-- Initialize positions
 	if currentCameraPos == nil then
-		currentCameraPos = targetPos
+		currentCameraPos = targetCameraPos
+		currentLookAt = targetLookAt
 	end
 
 	-- Update screen shake
@@ -72,12 +131,14 @@ RunService.RenderStepped:Connect(function(dt)
 		shakeIntensity = 0
 	end
 
-	-- Smooth follow
-	currentCameraPos = currentCameraPos:Lerp(targetPos, CAMERA_SMOOTHING)
-	camera.CFrame = CFrame.new(currentCameraPos + shakeOffset, lookAt + shakeOffset)
+	-- Smooth follow with cinematic lag
+	currentCameraPos = currentCameraPos:Lerp(targetCameraPos, CAMERA_SMOOTHING)
+	currentLookAt = currentLookAt:Lerp(targetLookAt, CAMERA_LOOK_SMOOTHING)
+
+	camera.CFrame = CFrame.new(currentCameraPos + shakeOffset, currentLookAt + shakeOffset)
 end)
 
--- Make the character face toward the mouse position on the ground plane
+-- Face character toward camera look direction
 RunService.Heartbeat:Connect(function()
 	local char = getCharacter()
 	if not char then return end
@@ -85,26 +146,16 @@ RunService.Heartbeat:Connect(function()
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not hrp or not humanoid or humanoid.Health <= 0 then return end
 
-	-- Raycast from mouse to find ground point
-	local mouse = player:GetMouse()
-	local ray = camera:ScreenPointToRay(mouse.X, mouse.Y)
-
-	-- Intersect with Y=hrp.Position.Y plane
-	local planeY = hrp.Position.Y
-	if ray.Direction.Y ~= 0 then
-		local t = (planeY - ray.Origin.Y) / ray.Direction.Y
-		if t > 0 then
-			local groundPoint = ray.Origin + ray.Direction * t
-			local lookDir = (groundPoint - hrp.Position)
-			lookDir = Vector3.new(lookDir.X, 0, lookDir.Z)
-			if lookDir.Magnitude > 1 then
-				hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDir.Unit)
-			end
-		end
+	-- Face character in the direction the camera is looking (XZ only)
+	local cosYaw = math.cos(yaw)
+	local sinYaw = math.sin(yaw)
+	local lookDir = Vector3.new(-sinYaw, 0, -cosYaw)
+	if lookDir.Magnitude > 0.1 then
+		hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDir)
 	end
 end)
 
--- Screen shake from server events (heavy enemy hits)
+-- Screen shake from server events
 local ScreenShakeEvent = ReplicatedStorage:WaitForChild("ScreenShakeEvent", 5)
 if ScreenShakeEvent then
 	ScreenShakeEvent.OnClientEvent:Connect(function(intensity, duration)
@@ -113,19 +164,20 @@ if ScreenShakeEvent then
 	end)
 end
 
--- Screen shake from local combat (heavy attacks landing)
 local EnemyHitEvent = ReplicatedStorage:WaitForChild("EnemyHitEvent", 5)
 if EnemyHitEvent then
-	EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType, sourcePos)
+	EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType, sourcePos, attackType)
 		if hitType == "hit" then
-			-- Light shake on player hits
-			shakeIntensity = math.max(shakeIntensity, 1.5)
+			local intensity = 1.5
+			if attackType == "HeavyAttack" then
+				intensity = 3.0
+			end
+			shakeIntensity = math.max(shakeIntensity, intensity)
 			shakeDecay = 0.08
 		end
 	end)
 end
 
--- Screen shake on taking damage
 local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent", 5)
 if DamageEvent then
 	DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
@@ -135,4 +187,4 @@ if DamageEvent then
 	end)
 end
 
-print("[BrawlAlley] CameraController loaded")
+print("[BrawlAlley] CameraController loaded (third-person over-shoulder)")
