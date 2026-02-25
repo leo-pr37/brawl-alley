@@ -778,6 +778,42 @@ function AnimationManager.PlaySpeedsterTaunt(model)
 end
 
 ------------------------------------------------------------
+-- ENEMY LOCOMOTION
+------------------------------------------------------------
+function AnimationManager.PlayEnemyLocomotion(model, enemyType, isMoving)
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder or not motors.LeftShoulder then return end
+
+	local s = 1
+	if enemyType == "Brawler" then
+		s = 1.15
+	elseif enemyType == "Speedster" then
+		s = 0.9
+	end
+
+	local swing = 0
+	if isMoving then
+		swing = math.sin(tick() * 10) * math.rad(24)
+	end
+
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(swing, 0, 0),
+		0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+	tweenMotor(motors.LeftShoulder,
+		CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(-swing, 0, 0),
+		0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+
+	if motors.RightHip and motors.LeftHip then
+		tweenMotor(motors.RightHip,
+			CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(-swing * 0.7, 0, 0),
+			0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+		tweenMotor(motors.LeftHip,
+			CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(swing * 0.7, 0, 0),
+			0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+	end
+end
+
+------------------------------------------------------------
 -- TAUNT BILLBOARD TEXT
 ------------------------------------------------------------
 function AnimationManager.ShowTauntText(model, text, duration)

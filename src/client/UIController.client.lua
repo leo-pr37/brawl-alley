@@ -222,10 +222,65 @@ subtitleLabel.TextStrokeTransparency = 0.3
 subtitleLabel.ZIndex = 21
 subtitleLabel.Parent = startScreen
 
+local artOfWarQuotes = {
+	"Victorious warriors win first and then go to war.",
+	"The supreme art of war is to subdue the enemy without fighting.",
+	"In the midst of chaos, there is also opportunity.",
+	"If you know the enemy and know yourself, you need not fear the result of a hundred battles.",
+	"Pretend inferiority and encourage arrogance.",
+	"Treat your men as you would your own beloved sons, and they will follow you into the deepest valley.",
+	"He who is prudent and lies in wait for an enemy who is not, will be victorious.",
+	"Opportunities multiply as they are seized.",
+	"Move swift as the wind and closely formed as the forest.",
+	"To know your enemy, you must become your enemy.",
+}
+
+local quoteLabel = Instance.new("TextLabel")
+quoteLabel.Name = "Quote"
+quoteLabel.Size = UDim2.new(0.6, 0, 0.18, 0)
+quoteLabel.Position = UDim2.new(0.2, 0, 0.46, 0)
+quoteLabel.BackgroundTransparency = 1
+quoteLabel.Text = "\"" .. artOfWarQuotes[math.random(1, #artOfWarQuotes)] .. "\"\n- Sun Tzu"
+quoteLabel.TextColor3 = Color3.fromRGB(210, 210, 220)
+quoteLabel.Font = Enum.Font.Gotham
+quoteLabel.TextSize = 20
+quoteLabel.TextWrapped = true
+quoteLabel.TextStrokeTransparency = 0.5
+quoteLabel.ZIndex = 21
+quoteLabel.Parent = startScreen
+
+local controlsToggleButton = Instance.new("TextButton")
+controlsToggleButton.Name = "ControlsToggle"
+controlsToggleButton.Size = UDim2.new(0.2, 0, 0.05, 0)
+controlsToggleButton.Position = UDim2.new(0.4, 0, 0.63, 0)
+controlsToggleButton.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+controlsToggleButton.Text = "SHOW CONTROLS"
+controlsToggleButton.TextColor3 = Color3.new(1, 1, 1)
+controlsToggleButton.Font = Enum.Font.GothamBold
+controlsToggleButton.TextSize = 14
+controlsToggleButton.ZIndex = 21
+controlsToggleButton.Parent = startScreen
+local controlsToggleCorner = Instance.new("UICorner")
+controlsToggleCorner.CornerRadius = UDim.new(0, 8)
+controlsToggleCorner.Parent = controlsToggleButton
+
+local controlsPanel = Instance.new("Frame")
+controlsPanel.Name = "ControlsPanel"
+controlsPanel.Size = UDim2.new(0.6, 0, 0.2, 0)
+controlsPanel.Position = UDim2.new(0.2, 0, 0.46, 0)
+controlsPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+controlsPanel.BackgroundTransparency = 0.35
+controlsPanel.Visible = false
+controlsPanel.ZIndex = 21
+controlsPanel.Parent = startScreen
+local controlsPanelCorner = Instance.new("UICorner")
+controlsPanelCorner.CornerRadius = UDim.new(0, 8)
+controlsPanelCorner.Parent = controlsPanel
+
 local controlsLabel = Instance.new("TextLabel")
 controlsLabel.Name = "Controls"
-controlsLabel.Size = UDim2.new(0.6, 0, 0.28, 0)
-controlsLabel.Position = UDim2.new(0.2, 0, 0.46, 0)
+controlsLabel.Size = UDim2.new(1, -20, 1, -20)
+controlsLabel.Position = UDim2.new(0, 10, 0, 10)
 controlsLabel.BackgroundTransparency = 1
 controlsLabel.Text = [[CONTROLS:
 WASD - Move
@@ -237,15 +292,21 @@ Shift / Q - Dodge
 Ctrl (hold) - Sprint
 E - Pick Up Item
 F - Throw Held Item
-R - Drop Held Item
-  
-Select your level and difficulty, then start!]]
-controlsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+R - Drop Held Item]]
+controlsLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
 controlsLabel.Font = Enum.Font.Gotham
-controlsLabel.TextSize = 18
+controlsLabel.TextSize = 16
+controlsLabel.TextXAlignment = Enum.TextXAlignment.Left
+controlsLabel.TextYAlignment = Enum.TextYAlignment.Top
+controlsLabel.TextWrapped = true
 controlsLabel.TextStrokeTransparency = 0.5
-controlsLabel.ZIndex = 21
-controlsLabel.Parent = startScreen
+controlsLabel.ZIndex = 22
+controlsLabel.Parent = controlsPanel
+
+controlsToggleButton.MouseButton1Click:Connect(function()
+	controlsPanel.Visible = not controlsPanel.Visible
+	controlsToggleButton.Text = controlsPanel.Visible and "HIDE CONTROLS" or "SHOW CONTROLS"
+end)
 
 local levelKeys = EnemyTypes.LevelOrder or {EnemyTypes.DefaultLevel or "Alley"}
 if #levelKeys == 0 then

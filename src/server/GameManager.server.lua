@@ -52,6 +52,8 @@ local playerDeaths = {} -- track dead players
 local heldItems = {}
 local itemUseCooldowns = {}
 local itemSpawnerRunning = false
+local enemyHeldItems = setmetatable({}, { __mode = "k" })
+local enemyMoveAnimTimes = setmetatable({}, { __mode = "k" })
 local DIFFICULTY_SETTINGS = {
 	Easy = {HealthMultiplier = 0.8, DamageMultiplier = 0.8, SpeedMultiplier = 0.9},
 	Normal = {HealthMultiplier = 1.0, DamageMultiplier = 1.0, SpeedMultiplier = 1.0},
@@ -247,6 +249,174 @@ local function dropHeldItem(player, dropDirection)
 	heldItems[player.UserId] = nil
 	itemUseCooldowns[player.UserId] = nil
 	HeldItemStateEvent:FireClient(player, nil)
+end
+
+local function clearEnemyHeldItem(enemy)
+	local held = enemyHeldItems[enemy]
+	if held and held.Part and held.Part.Parent then
+		held.Part:Destroy()
+	end
+	enemyHeldItems[enemy] = nil
+end
+
+local function maybePlayEnemyMoveAnim(enemy, typeName, moving)
+	local now = tick()
+	local last = enemyMoveAnimTimes[enemy] or 0
+	if now - last < 0.18 then
+		return
+	end
+	enemyMoveAnimTimes[enemy] = now
+	AnimationManager.PlayEnemyLocomotion(enemy, typeName, moving)
+end
+
+local function enemyTryPickupItem(enemy, enemyHumanoid)
+	if enemyHeldItems[enemy] or not enemy.PrimaryPart then
+		return false
+	end
+
+	local nearestItem = findNearestGroundItem(enemy.PrimaryPart.Position, CombatConfig.Items.PickupRange * 0.8)
+	if not nearestItem then
+		return false
+	end
+
+	local itemType = nearestItem:GetAttribute("ItemType")
+	if itemType == "Health" then
+		if enemyHumanoid.Health < enemyHumanoid.MaxHealth then
+			enemyHumanoid.Health = math.min(enemyHumanoid.MaxHealth, enemyHumanoid.Health + CombatConfig.Items.Health.HealAmount)
+			nearestItem:Destroy()
+			return true
+		end
+		return false
+	end
+
+	local attachPart = enemy:FindFirstChild("RightHand")
+		or enemy:FindFirstChild("RightUpperArm")
+		or enemy:FindFirstChild("HumanoidRootPart")
+	if not attachPart then
+		return false
+	end
+
+	nearestItem.Anchored = false
+	nearestItem.CanCollide = false
+	nearestItem.Massless = true
+	nearestItem.CFrame = attachPart.CFrame * CFrame.new(0, -0.8, -1)
+	nearestItem.Parent = enemy
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = attachPart
+	weld.Part1 = nearestItem
+	weld.Parent = nearestItem
+
+	enemyHeldItems[enemy] = {
+		Type = itemType,
+		Part = nearestItem,
+		LastUse = 0,
+	}
+	return true
+end
+
+local function enemyThrowAtPlayer(enemy, target, held, throwConfig)
+	if not enemy.PrimaryPart or not target or not target:FindFirstChild("HumanoidRootPart") then
+		clearEnemyHeldItem(enemy)
+		return false
+	end
+
+	local rockPart = held.Part
+	if not rockPart or not rockPart.Parent then
+		clearEnemyHeldItem(enemy)
+		return false
+	end
+
+	for _, child in ipairs(rockPart:GetChildren()) do
+		if child:IsA("WeldConstraint") then
+			child:Destroy()
+		end
+	end
+
+	local origin = enemy.PrimaryPart.Position + Vector3.new(0, 1.5, 0)
+	local targetPos = target.HumanoidRootPart.Position + Vector3.new(0, 1, 0)
+	local dir = (targetPos - origin).Magnitude > 0 and (targetPos - origin).Unit or enemy.PrimaryPart.CFrame.LookVector
+
+	rockPart.Anchored = false
+	rockPart.CanCollide = true
+	rockPart.Massless = false
+	rockPart.CFrame = CFrame.new(origin)
+	rockPart.Parent = workspace
+
+	local hitDone = false
+	local touchConnection
+	touchConnection = rockPart.Touched:Connect(function(hit)
+		if hitDone then return end
+		if hit:IsDescendantOf(enemy) then return end
+		local victim = hit:FindFirstAncestorOfClass("Model")
+		local victimPlayer = victim and Players:GetPlayerFromCharacter(victim)
+		if not victimPlayer then return end
+		local victimHumanoid = victim:FindFirstChildOfClass("Humanoid")
+		if not victimHumanoid or victimHumanoid.Health <= 0 then return end
+
+		hitDone = true
+		victimHumanoid:TakeDamage(throwConfig.ThrowDamage)
+		DamageEvent:FireClient(victimPlayer, throwConfig.ThrowDamage, false, enemy.PrimaryPart.Position)
+		EnemyHitEvent:FireAllClients(enemy, "hit", rockPart.Position, "EnemyItemThrow")
+		if touchConnection then touchConnection:Disconnect() end
+		rockPart:Destroy()
+	end)
+
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.Velocity = dir * throwConfig.ThrowSpeed + Vector3.new(0, 10, 0)
+	bv.Parent = rockPart
+	Debris:AddItem(bv, 0.25)
+	Debris:AddItem(rockPart, throwConfig.ProjectileLifetime)
+	task.delay(throwConfig.ProjectileLifetime, function()
+		if touchConnection then touchConnection:Disconnect() end
+	end)
+
+	enemyHeldItems[enemy] = nil
+	return true
+end
+
+local function enemyTryUseHeldItem(enemy, enemyDef, target, dist)
+	local held = enemyHeldItems[enemy]
+	if not held or not held.Part or not held.Part.Parent then
+		enemyHeldItems[enemy] = nil
+		return false
+	end
+
+	local now = tick()
+	local cooldown = CombatConfig.Items.Weapon.SwingCooldown
+	if held.Type == "Rock" then
+		cooldown = CombatConfig.Items.Rock.ThrowCooldown
+	end
+	if now - (held.LastUse or 0) < cooldown then
+		return false
+	end
+
+	if held.Type == "Weapon" then
+		if dist > CombatConfig.Items.Weapon.SwingRange then
+			return false
+		end
+		local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
+		if not targetHumanoid or targetHumanoid.Health <= 0 then
+			return false
+		end
+		held.LastUse = now
+		targetHumanoid:TakeDamage(CombatConfig.Items.Weapon.SwingDamage)
+		local hitPlayer = Players:GetPlayerFromCharacter(target)
+		if hitPlayer then
+			DamageEvent:FireClient(hitPlayer, CombatConfig.Items.Weapon.SwingDamage, false, enemy.PrimaryPart.Position)
+		end
+		EnemyHitEvent:FireAllClients(enemy, "attack", enemy.PrimaryPart.Position, "EnemyItemSwing")
+		return true
+	elseif held.Type == "Rock" then
+		if dist > 30 then
+			return false
+		end
+		held.LastUse = now
+		return enemyThrowAtPlayer(enemy, target, held, CombatConfig.Items.Rock)
+	end
+
+	return false
 end
 
 local function updateEnemyHealthBar(enemy, enemyHumanoid)
@@ -497,6 +667,7 @@ local function spawnEnemy(typeName, waveNum)
 
 	-- Death handling
 	humanoid.Died:Connect(function()
+		clearEnemyHeldItem(model)
 		enemiesAlive = enemiesAlive - 1
 
 		-- Award score
@@ -636,7 +807,18 @@ local function runEnemyAI()
 							if dist > aggroRange then
 								humanoid.WalkSpeed = baseWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
+								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								if aiState then aiState.Value = "approaching" end
+								continue
+							end
+
+							if enemyTryPickupItem(enemy, humanoid) then
+								maybePlayEnemyMoveAnim(enemy, typeName, false)
+								continue
+							end
+
+							if enemyTryUseHeldItem(enemy, enemyDef, target, dist) then
+								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								continue
 							end
 
@@ -653,6 +835,7 @@ local function runEnemyAI()
 								else
 									humanoid.WalkSpeed = approachWalkSpeed
 									humanoid:MoveTo(target.HumanoidRootPart.Position)
+									maybePlayEnemyMoveAnim(enemy, typeName, true)
 									continue
 								end
 							end
@@ -663,6 +846,7 @@ local function runEnemyAI()
 							if nearbyFighters >= maxActiveFighters and dist > attackRange then
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
+								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								continue
 							end
 
@@ -679,6 +863,7 @@ local function runEnemyAI()
 							end
 
 							if dist <= attackRange then
+								maybePlayEnemyMoveAnim(enemy, typeName, false)
 								-- Attack with combo system
 								local lastAtk = data:FindFirstChild("LastAttack")
 								local comboStepVal = data:FindFirstChild("ComboStep")
@@ -715,6 +900,7 @@ local function runEnemyAI()
 							else
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(target.HumanoidRootPart.Position)
+								maybePlayEnemyMoveAnim(enemy, typeName, true)
 							end
 						end
 					end
