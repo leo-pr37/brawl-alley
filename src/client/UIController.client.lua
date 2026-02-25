@@ -31,6 +31,7 @@ local PlayerDiedEvent = ReplicatedStorage:WaitForChild("PlayerDiedEvent")
 local RequestRestartEvent = ReplicatedStorage:WaitForChild("RequestRestartEvent")
 local RequestGameStartEvent = ReplicatedStorage:WaitForChild("RequestGameStartEvent")
 local SpawnEffectEvent = ReplicatedStorage:WaitForChild("SpawnEffectEvent")
+local TeamStatusEvent = ReplicatedStorage:WaitForChild("TeamStatusEvent")
 
 ------------------------------------------------------------
 -- CREATE UI
@@ -440,7 +441,7 @@ waitingLabel.Name = "Waiting"
 waitingLabel.Size = UDim2.new(0.7, 0, 0.05, 0)
 waitingLabel.Position = UDim2.new(0.15, 0, 0.94, 0)
 waitingLabel.BackgroundTransparency = 1
-waitingLabel.Text = "Waiting for start..."
+waitingLabel.Text = "Team size: 0/4"
 waitingLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 waitingLabel.Font = Enum.Font.GothamBold
 waitingLabel.TextSize = 18
@@ -559,7 +560,7 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 		startGameButton.Text = "START BRAWL"
 		startGameButton.AutoButtonColor = true
 		startGameButton.Active = true
-		waitingLabel.Text = "Waiting for start..."
+		waitingLabel.Text = "Team size: 0/4"
 		backgroundOverlay.BackgroundTransparency = 0.35
 
 		-- Hide game over screen
@@ -605,6 +606,14 @@ GameStateEvent.OnClientEvent:Connect(function(state, data)
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 		UserInputService.MouseIconEnabled = true
 	end
+end)
+
+TeamStatusEvent.OnClientEvent:Connect(function(activeCount, maxPlayers, overflow)
+	local text = string.format("Team size: %d/%d", activeCount or 0, maxPlayers or 4)
+	if overflow and overflow > 0 then
+		text = text .. string.format("  (%d spectating)", overflow)
+	end
+	waitingLabel.Text = text
 end)
 
 -- Score updates

@@ -16,6 +16,8 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
 local ComicBubbles = require(Shared:WaitForChild("ComicBubbles"))
+local StateMachine = require(Shared:WaitForChild("StateMachine"))
+local CharacterStates = require(Shared:WaitForChild("CharacterStates"))
 
 -- Remote events
 local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
@@ -36,6 +38,7 @@ local attackCooldownEnd = 0
 local heldItemType = nil
 local lastItemUseTime = 0
 local isSprinting = false
+local playerSM = nil -- StateMachine, created on CharacterAdded
 
 local BASE_WALK_SPEED = CombatConfig.PlayerWalkSpeed or 20
 local SPRINT_WALK_SPEED = BASE_WALK_SPEED * 1.5
@@ -132,9 +135,13 @@ local function doAttack(attackType)
 	if not isAlive() then return end
 	if isBlocking then return end
 	if heldItemType then return end
+	if playerSM and playerSM:IsLocked() then return end
 
 	local now = tick()
 	if now < attackCooldownEnd then return end
+
+	-- Set state machine to Attacking
+	if playerSM then playerSM:SetState("Attacking", true) end
 
 	local config = CombatConfig.Attacks[attackType]
 	if not config then return end
@@ -230,6 +237,7 @@ end
 -- Dodge
 local function doDodge()
 	if not isAlive() then return end
+	if playerSM and playerSM:IsLocked() then return end
 	local now = tick()
 	if now - lastDodgeTime < CombatConfig.DodgeCooldown then return end
 	lastDodgeTime = now
@@ -238,6 +246,8 @@ local function doDodge()
 		isBlocking = false
 		BlockEvent:FireServer(false)
 	end
+
+	if playerSM then playerSM:SetState("Dodging", true) end
 
 	local moveDir = Vector3.new(0, 0, 0)
 	local hrp = getHumanoidRootPart()
@@ -289,8 +299,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		if playerSM and playerSM:IsLocked() then return end
 		isBlocking = true
 		BlockEvent:FireServer(true)
+		if playerSM then playerSM:SetState("Blocking", true) end
 		local char = getCharacter()
 		if char and AnimationManager.HasJoints(char) then
 			AnimationManager.PlayBlock(char)
@@ -339,6 +351,9 @@ UserInputService.InputEnded:Connect(function(input, processed)
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		isBlocking = false
 		BlockEvent:FireServer(false)
+		if playerSM and playerSM:GetState() == "Blocking" then
+			playerSM:SetState("Idle", true)
+		end
 		local char = getCharacter()
 		if char and AnimationManager.HasJoints(char) then
 			AnimationManager.PlayUnblock(char)
@@ -425,6 +440,7 @@ DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
 	if wasBlocked then return end
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) and not isBlocking then
+		if playerSM then playerSM:SetState("HitStun", true) end
 		AnimationManager.PlayHitReaction(char)
 	end
 end)
@@ -453,6 +469,10 @@ player.CharacterAdded:Connect(function(character)
 		humanoid.WalkSpeed = BASE_WALK_SPEED
 	end
 	isSprinting = false
+
+	-- Create player state machine
+	playerSM = StateMachine.new(character, CharacterStates.Player)
+	playerSM:SetState("Idle", true)
 end)
 
 -- Setup joints on character spawn
@@ -471,5 +491,30 @@ if player.Character then
 		end
 	end)
 end
+
+-- Drive player state machine locomotion each frame
+RunService.Heartbeat:Connect(function(dt)
+	if not playerSM then return end
+	local char = player.Character
+	if not char then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	local state = playerSM:GetState()
+	-- Only auto-set locomotion states when not in a locked/action state
+	if not playerSM:IsLocked() then
+		local moving = humanoid.MoveDirection.Magnitude > 0.05
+		if moving then
+			local want = isSprinting and "Sprinting" or "Walking"
+			if state ~= want then playerSM:SetState(want) end
+		else
+			if state ~= "Idle" and state ~= "Blocking" then
+				playerSM:SetState("Idle")
+			end
+		end
+	end
+
+	playerSM:Update(dt)
+end)
 
 print("[BrawlAlley] CombatController loaded")

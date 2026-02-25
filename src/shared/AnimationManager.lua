@@ -60,6 +60,24 @@ local function getAllMotors(model)
 	return motors
 end
 
+-- Set motor C0 immediately (no tween) — for continuous animations like walking.
+-- Applies the same auto-adapt delta as tweenMotor.
+local function setMotorDirect(motor, targetC0)
+	if not motor then return end
+	local model = motor.Parent and motor.Parent.Parent
+	if model and basePoses[model] and basePoses[model][motor.Name] then
+		local baseC0 = basePoses[model][motor.Name]
+		local restKey = motor.Name
+		if restKey == "Root" then restKey = "RootJoint" end
+		local restC0 = REST_POSES[restKey]
+		if restC0 then
+			local delta = restC0:Inverse() * targetC0
+			targetC0 = baseC0 * delta
+		end
+	end
+	motor.C0 = targetC0
+end
+
 local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
 	if not motor then return nil end
 	duration = math.max(duration or 0.1, 0.06)
@@ -778,7 +796,7 @@ function AnimationManager.PlaySpeedsterTaunt(model)
 end
 
 ------------------------------------------------------------
--- ENEMY LOCOMOTION
+-- LOCOMOTION (direct C0 — no tweens for smooth continuous motion)
 ------------------------------------------------------------
 function AnimationManager.PlayEnemyLocomotion(model, enemyType, isMoving)
 	local motors = getAllMotors(model)
@@ -791,25 +809,108 @@ function AnimationManager.PlayEnemyLocomotion(model, enemyType, isMoving)
 		s = 0.9
 	end
 
-	local swing = 0
 	if isMoving then
-		swing = math.sin(tick() * 10) * math.rad(24)
+		local t = tick()
+		local armSwing = math.sin(t * 8) * math.rad(35)
+		local legSwing = math.sin(t * 8) * math.rad(28)
+		local bodyBob = math.sin(t * 16) * math.rad(2)
+
+		setMotorDirect(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(-armSwing, 0, math.rad(5)))
+		setMotorDirect(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(armSwing, 0, math.rad(-5)))
+
+		if motors.RightHip then
+			setMotorDirect(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(legSwing, 0, 0))
+		end
+		if motors.LeftHip then
+			setMotorDirect(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(-legSwing, 0, 0))
+		end
+		if motors.RootJoint then
+			setMotorDirect(motors.RootJoint,
+				CFrame.Angles(math.rad(-3), 0, bodyBob))
+		end
+	else
+		-- Idle: subtle breathing sway
+		local t = tick()
+		local breathe = math.sin(t * 2) * math.rad(3)
+
+		setMotorDirect(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(breathe, 0, math.rad(3)))
+		setMotorDirect(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(-breathe, 0, math.rad(-3)))
+
+		if motors.RightHip then
+			setMotorDirect(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0))
+		end
+		if motors.LeftHip then
+			setMotorDirect(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0))
+		end
+		if motors.RootJoint then
+			setMotorDirect(motors.RootJoint,
+				CFrame.Angles(0, 0, breathe * 0.5))
+		end
 	end
+end
 
-	tweenMotor(motors.RightShoulder,
-		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(swing, 0, 0),
-		0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-	tweenMotor(motors.LeftShoulder,
-		CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(-swing, 0, 0),
-		0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+-- Player locomotion — similar but slightly different proportions
+function AnimationManager.PlayPlayerLocomotion(model, isMoving, isSprinting)
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder or not motors.LeftShoulder then return end
 
-	if motors.RightHip and motors.LeftHip then
-		tweenMotor(motors.RightHip,
-			CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(-swing * 0.7, 0, 0),
-			0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-		tweenMotor(motors.LeftHip,
-			CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(swing * 0.7, 0, 0),
-			0.12, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+	local s = 1
+
+	if isMoving then
+		local speed = isSprinting and 11 or 8
+		local amplitude = isSprinting and 42 or 30
+		local t = tick()
+		local armSwing = math.sin(t * speed) * math.rad(amplitude)
+		local legSwing = math.sin(t * speed) * math.rad(amplitude * 0.8)
+		local bodyBob = math.sin(t * speed * 2) * math.rad(2)
+
+		setMotorDirect(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(-armSwing, 0, math.rad(5)))
+		setMotorDirect(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(armSwing, 0, math.rad(-5)))
+
+		if motors.RightHip then
+			setMotorDirect(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(legSwing, 0, 0))
+		end
+		if motors.LeftHip then
+			setMotorDirect(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(-legSwing, 0, 0))
+		end
+		if motors.RootJoint then
+			setMotorDirect(motors.RootJoint,
+				CFrame.Angles(isSprinting and math.rad(-8) or math.rad(-3), 0, bodyBob))
+		end
+	else
+		-- Idle breathing
+		local t = tick()
+		local breathe = math.sin(t * 2) * math.rad(2)
+
+		setMotorDirect(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(breathe, 0, math.rad(3)))
+		setMotorDirect(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(-breathe, 0, math.rad(-3)))
+
+		if motors.RightHip then
+			setMotorDirect(motors.RightHip,
+				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0))
+		end
+		if motors.LeftHip then
+			setMotorDirect(motors.LeftHip,
+				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(0, 0, 0))
+		end
+		if motors.RootJoint then
+			setMotorDirect(motors.RootJoint,
+				CFrame.Angles(0, 0, breathe * 0.3))
+		end
 	end
 end
 

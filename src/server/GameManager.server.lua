@@ -15,6 +15,8 @@ local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
 local Utils = require(Shared:WaitForChild("Utils"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
+local StateMachine = require(Shared:WaitForChild("StateMachine"))
+local CharacterStates = require(Shared:WaitForChild("CharacterStates"))
 local ArenaBuilder = require(script.Parent:WaitForChild("ArenaBuilder"))
 
 -- Create RemoteEvents for client-server communication
@@ -55,6 +57,7 @@ local itemUseCooldowns = {}
 local itemSpawnerRunning = false
 local enemyHeldItems = setmetatable({}, { __mode = "k" })
 local enemyMoveAnimTimes = setmetatable({}, { __mode = "k" })
+local enemyStateMachines = setmetatable({}, { __mode = "k" })
 local DIFFICULTY_SETTINGS = {
 	Easy = {HealthMultiplier = 0.8, DamageMultiplier = 0.8, SpeedMultiplier = 0.9},
 	Normal = {HealthMultiplier = 1.0, DamageMultiplier = 1.0, SpeedMultiplier = 1.0},
@@ -682,6 +685,12 @@ local function spawnEnemy(typeName, waveNum)
 	-- Health bar
 	Utils.CreateHealthBar(model, maxHP)
 
+	-- Create state machine for this enemy
+	local sm = StateMachine.new(model, CharacterStates.Enemy)
+	sm:SetData("enemyType", typeName)
+	sm:SetState("Idle", true)
+	enemyStateMachines[model] = sm
+
 	model.Parent = enemiesFolder
 	enemiesAlive = enemiesAlive + 1
 
@@ -690,6 +699,8 @@ local function spawnEnemy(typeName, waveNum)
 
 	-- Death handling
 	humanoid.Died:Connect(function()
+		local esm = enemyStateMachines[model]
+		if esm then esm:Kill() end
 		clearEnemyHeldItem(model)
 		enemiesAlive = enemiesAlive - 1
 
@@ -720,6 +731,9 @@ local function doEnemyTaunt(enemy, enemyDef, data)
 	local taunting = data:FindFirstChild("IsTaunting")
 	if taunting then taunting.Value = true end
 
+	local sm = enemyStateMachines[enemy]
+	if sm then sm:SetState("Taunting", true) end
+
 	local typeName = data.Type.Value
 	EnemyAnimEvent:FireAllClients(enemy, "taunt", typeName)
 
@@ -731,7 +745,6 @@ local function doEnemyTaunt(enemy, enemyDef, data)
 		AnimationManager.PlaySpeedsterTaunt(enemy)
 	end
 
-	-- Show taunt text
 	AnimationManager.ShowTauntText(enemy, enemyDef.TauntText, 2)
 
 	local lastTauntVal = data:FindFirstChild("LastTaunt")
@@ -742,6 +755,10 @@ local function doEnemyTaunt(enemy, enemyDef, data)
 		if taunting and taunting.Parent then
 			taunting.Value = false
 		end
+		if sm and sm:GetState() == "Taunting" then
+			sm:Unlock()
+			sm:SetState("Idle", true)
+		end
 	end)
 end
 
@@ -749,6 +766,9 @@ local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 	local typeName = data.Type.Value
 	local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
 	if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+
+	local sm = enemyStateMachines[enemy]
+	if sm then sm:SetState("Attacking", true) end
 
 	-- Play attack animation
 	EnemyAnimEvent:FireAllClients(enemy, "attack", typeName, hitIndex)
@@ -804,6 +824,11 @@ local function runEnemyAI()
 					if enemiesFrozen then
 						continue
 					end
+					-- Skip if state machine is locked (HitStun, Attacking, Taunting)
+					local sm = enemyStateMachines[enemy]
+					if sm and sm:IsLocked() then
+						continue
+					end
 					-- Skip if currently taunting
 					local taunting = data:FindFirstChild("IsTaunting")
 					if taunting and taunting.Value then
@@ -831,6 +856,8 @@ local function runEnemyAI()
 								humanoid.WalkSpeed = baseWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
 								if aiState then aiState.Value = "approaching" end
+								local sm = enemyStateMachines[enemy]
+								if sm and sm:GetState() ~= "Idle" then sm:SetState("Idle") end
 								continue
 							end
 
@@ -847,6 +874,8 @@ local function runEnemyAI()
 								else
 									humanoid.WalkSpeed = approachWalkSpeed
 									humanoid:MoveTo(target.HumanoidRootPart.Position)
+									local sm = enemyStateMachines[enemy]
+									if sm and sm:GetState() ~= "Walking" then sm:SetState("Walking") end
 									continue
 								end
 							end
@@ -857,6 +886,8 @@ local function runEnemyAI()
 							if nearbyFighters >= maxActiveFighters and dist > attackRange then
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(enemy.PrimaryPart.Position)
+								local sm = enemyStateMachines[enemy]
+								if sm and sm:GetState() ~= "Idle" then sm:SetState("Idle") end
 								continue
 							end
 
@@ -909,6 +940,8 @@ local function runEnemyAI()
 							else
 								humanoid.WalkSpeed = approachWalkSpeed
 								humanoid:MoveTo(target.HumanoidRootPart.Position)
+								local sm = enemyStateMachines[enemy]
+								if sm and sm:GetState() ~= "Walking" then sm:SetState("Walking") end
 							end
 						end
 					end
@@ -921,22 +954,19 @@ end
 
 local function runEnemyLocomotion()
 	while gameState == "Playing" do
+		local dt = 0.1
 		for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 			if enemy:IsA("Model") and enemy.PrimaryPart then
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
-				local data = enemy:FindFirstChild("EnemyData")
-				if humanoid and humanoid.Health > 0 and data then
-					local taunting = data:FindFirstChild("IsTaunting")
-					local comboStep = data:FindFirstChild("ComboStep")
-					if (not taunting or not taunting.Value) and (not comboStep or comboStep.Value == 0) then
-						local typeName = data:FindFirstChild("Type") and data.Type.Value or "Thug"
-						local isMoving = humanoid.MoveDirection.Magnitude > 0.05
-						AnimationManager.PlayEnemyLocomotion(enemy, typeName, isMoving)
+				if humanoid and humanoid.Health > 0 then
+					local sm = enemyStateMachines[enemy]
+					if sm then
+						sm:Update(dt)
 					end
 				end
 			end
 		end
-		task.wait(0.1)
+		task.wait(dt)
 	end
 end
 
@@ -1095,6 +1125,10 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 				local dmg = config.Damage
 				enemyHumanoid:TakeDamage(dmg)
 				hitSomething = true
+
+				-- Set HitStun state on enemy
+				local esm = enemyStateMachines[enemy]
+				if esm then esm:SetState("HitStun", true) end
 
 				-- Knockback — more dramatic for heavy hits
 				local knockMult = 1.0

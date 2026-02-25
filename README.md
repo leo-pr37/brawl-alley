@@ -9,7 +9,7 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 - **3 Enemy Types** — Thugs (basic), Brawlers (tanky), Speedsters (fast)
 - **Level Selector + Difficulty** — Choose Alley District, Subway Yard, or Rooftop Run with Easy/Normal/Hard before starting
 - **Wave System** — 8 handcrafted opening waves per level + endless procedural generation
-- **Co-op Multiplayer** — Fight together with friends
+- **Co-op Multiplayer (Up to 4 Players)** — Fight together as a team against enemy waves
 - **Full HUD** — Health bar, score, combo counter, wave indicator
 - **Game Loop** — Start screen → gameplay → game over → restart
 - **Procedural Arena** — Street/alley environment built entirely with code
