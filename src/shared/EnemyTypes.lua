@@ -70,53 +70,87 @@ EnemyTypes.Types = {
 	},
 }
 
--- Wave definitions: each wave has a list of enemies to spawn
-EnemyTypes.Waves = {
-	[1] = {
-		{Type = "Thug", Count = 3},
+EnemyTypes.LevelOrder = {"Alley", "Subway", "Rooftops"}
+EnemyTypes.DefaultLevel = "Alley"
+
+-- Level definitions: each level has handcrafted opening waves and endless scaling weights.
+EnemyTypes.Levels = {
+	Alley = {
+		DisplayName = "Alley District",
+		WaveTemplates = {
+			[1] = {{Type = "Thug", Count = 3}},
+			[2] = {{Type = "Thug", Count = 4}, {Type = "Speedster", Count = 1}},
+			[3] = {{Type = "Thug", Count = 3}, {Type = "Speedster", Count = 2}},
+			[4] = {{Type = "Thug", Count = 2}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 1}},
+			[5] = {{Type = "Thug", Count = 3}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 3}},
+			[6] = {{Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 4}},
+			[7] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 3}},
+			[8] = {{Type = "Brawler", Count = 4}, {Type = "Speedster", Count = 5}},
+		},
+		ProceduralWeights = {Thug = 0.50, Brawler = 0.40, Speedster = 0.30},
 	},
-	[2] = {
-		{Type = "Thug", Count = 4},
-		{Type = "Speedster", Count = 1},
+	Subway = {
+		DisplayName = "Subway Yard",
+		WaveTemplates = {
+			[1] = {{Type = "Thug", Count = 4}},
+			[2] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 1}},
+			[3] = {{Type = "Thug", Count = 5}, {Type = "Speedster", Count = 1}},
+			[4] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 2}},
+			[5] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 2}},
+			[6] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 2}},
+			[7] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 3}},
+			[8] = {{Type = "Thug", Count = 6}, {Type = "Brawler", Count = 4}, {Type = "Speedster", Count = 3}},
+		},
+		ProceduralWeights = {Thug = 0.70, Brawler = 0.45, Speedster = 0.25},
 	},
-	[3] = {
-		{Type = "Thug", Count = 3},
-		{Type = "Speedster", Count = 2},
-	},
-	[4] = {
-		{Type = "Thug", Count = 2},
-		{Type = "Brawler", Count = 2},
-		{Type = "Speedster", Count = 1},
-	},
-	[5] = {
-		{Type = "Thug", Count = 3},
-		{Type = "Brawler", Count = 2},
-		{Type = "Speedster", Count = 3},
-	},
-	[6] = {
-		{Type = "Brawler", Count = 3},
-		{Type = "Speedster", Count = 4},
-	},
-	[7] = {
-		{Type = "Thug", Count = 4},
-		{Type = "Brawler", Count = 3},
-		{Type = "Speedster", Count = 3},
-	},
-	[8] = {
-		{Type = "Brawler", Count = 4},
-		{Type = "Speedster", Count = 5},
+	Rooftops = {
+		DisplayName = "Rooftop Run",
+		WaveTemplates = {
+			[1] = {{Type = "Speedster", Count = 3}},
+			[2] = {{Type = "Speedster", Count = 4}, {Type = "Thug", Count = 2}},
+			[3] = {{Type = "Speedster", Count = 4}, {Type = "Brawler", Count = 1}},
+			[4] = {{Type = "Speedster", Count = 5}, {Type = "Thug", Count = 2}, {Type = "Brawler", Count = 1}},
+			[5] = {{Type = "Speedster", Count = 5}, {Type = "Brawler", Count = 2}},
+			[6] = {{Type = "Speedster", Count = 6}, {Type = "Thug", Count = 3}, {Type = "Brawler", Count = 2}},
+			[7] = {{Type = "Speedster", Count = 7}, {Type = "Thug", Count = 3}, {Type = "Brawler", Count = 2}},
+			[8] = {{Type = "Speedster", Count = 7}, {Type = "Thug", Count = 4}, {Type = "Brawler", Count = 3}},
+		},
+		ProceduralWeights = {Thug = 0.35, Brawler = 0.40, Speedster = 0.60},
 	},
 }
 
--- After wave 8, generate procedural waves
-function EnemyTypes.GetWave(waveNumber)
-	if waveNumber <= #EnemyTypes.Waves then
-		return EnemyTypes.Waves[waveNumber]
+-- Compatibility for existing code paths that still read EnemyTypes.Waves.
+EnemyTypes.Waves = EnemyTypes.Levels[EnemyTypes.DefaultLevel].WaveTemplates
+
+function EnemyTypes.GetLevel(levelKey)
+	return EnemyTypes.Levels[levelKey] or EnemyTypes.Levels[EnemyTypes.DefaultLevel]
+end
+
+local function cloneWave(waveDef)
+	local copy = {}
+	for i, group in ipairs(waveDef) do
+		copy[i] = {
+			Type = group.Type,
+			Count = group.Count,
+		}
 	end
+	return copy
+end
+
+-- After wave 8, generate procedural waves
+function EnemyTypes.GetWave(waveNumber, levelKey)
+	local level = EnemyTypes.GetLevel(levelKey)
+	local waves = level.WaveTemplates
+
+	if waveNumber <= #waves then
+		return cloneWave(waves[waveNumber])
+	end
+
 	-- Procedural wave generation for endless mode
-	local thugs = math.floor(waveNumber * 0.5)
-	local brawlers = math.floor(waveNumber * 0.4)
-	local speedsters = math.floor(waveNumber * 0.3)
+	local weights = level.ProceduralWeights
+	local thugs = math.max(1, math.floor(waveNumber * (weights.Thug or 0.5)))
+	local brawlers = math.max(1, math.floor(waveNumber * (weights.Brawler or 0.4)))
+	local speedsters = math.max(1, math.floor(waveNumber * (weights.Speedster or 0.3)))
 	return {
 		{Type = "Thug", Count = thugs},
 		{Type = "Brawler", Count = brawlers},

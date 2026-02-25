@@ -22,6 +22,8 @@ local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
 local BlockEvent = ReplicatedStorage:WaitForChild("BlockEvent")
 local DodgeEvent = ReplicatedStorage:WaitForChild("DodgeEvent")
 local ComicBubbleEvent = ReplicatedStorage:WaitForChild("ComicBubbleEvent", 10)
+local ItemInteractEvent = ReplicatedStorage:WaitForChild("ItemInteractEvent")
+local HeldItemStateEvent = ReplicatedStorage:WaitForChild("HeldItemStateEvent")
 
 -- Combat state
 local comboCount = 0
@@ -31,6 +33,8 @@ local isBlocking = false
 local mouseHoldStart = 0
 local isHolding = false
 local attackCooldownEnd = 0
+local heldItemType = nil
+local lastItemUseTime = 0
 
 -- Get character safely
 local function getCharacter()
@@ -116,6 +120,7 @@ end
 local function doAttack(attackType)
 	if not isAlive() then return end
 	if isBlocking then return end
+	if heldItemType then return end
 
 	local now = tick()
 	if now < attackCooldownEnd then return end
@@ -155,6 +160,35 @@ local function doAttack(attackType)
 		comboEvent.Parent = ReplicatedStorage
 	end
 	comboEvent:Fire(comboCount, attackType)
+end
+
+local function tryUseHeldItem()
+	if not heldItemType or not isAlive() or isBlocking then
+		return false
+	end
+
+	local now = tick()
+	if now - lastItemUseTime < CombatConfig.Items.ItemUseInputCooldown then
+		return true
+	end
+	lastItemUseTime = now
+
+	ItemInteractEvent:FireServer("Use", getLookDirection())
+
+	local char = getCharacter()
+	if char and AnimationManager.HasJoints(char) then
+		if heldItemType == "Weapon" then
+			AnimationManager.PlayHeavyPunch(char)
+		else
+			AnimationManager.PlayLightPunch(char, 1)
+		end
+	end
+	return true
+end
+
+local function tryPickupItem()
+	if not isAlive() then return end
+	ItemInteractEvent:FireServer("Pickup")
 end
 
 -- Dodge
@@ -212,8 +246,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		mouseHoldStart = tick()
-		isHolding = true
+		if not tryUseHeldItem() then
+			mouseHoldStart = tick()
+			isHolding = true
+		end
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
@@ -232,10 +268,15 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if input.KeyCode == Enum.KeyCode.Q then
 		doDodge()
 	end
+
+	if input.KeyCode == Enum.KeyCode.E then
+		tryPickupItem()
+	end
 end)
 
 UserInputService.InputEnded:Connect(function(input, processed)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if heldItemType then return end
 		if isHolding then
 			isHolding = false
 			local holdDuration = tick() - mouseHoldStart
@@ -346,6 +387,13 @@ if ComicBubbleEvent then
 		end
 	end)
 end
+
+HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
+	heldItemType = itemType
+	if not itemType then
+		lastItemUseTime = 0
+	end
+end)
 
 -- Setup joints on character spawn
 player.CharacterAdded:Connect(function(character)

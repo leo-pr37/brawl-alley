@@ -1,7 +1,7 @@
 --[[
 	AnimationManager (Shared)
 	Procedural animation system using Motor6D C0/C1 CFrame manipulation.
-	Works on both client (player) and server (enemies).
+	Works on both client (player) and server (enemies), with R15-first support.
 	No Animation assets needed - pure code-driven joint transforms.
 	V2: More exaggerated animations, dramatic reactions.
 ]]
@@ -11,6 +11,8 @@ local RunService = game:GetService("RunService")
 
 local AnimationManager = {}
 AnimationManager.__index = AnimationManager
+local resetTokens = setmetatable({}, { __mode = "k" })
+local basePoses = setmetatable({}, { __mode = "k" })
 
 -- Joint rest poses (relative to parent)
 local REST_POSES = {
@@ -42,13 +44,37 @@ local function getAllMotors(model)
 			motors[desc.Name] = desc
 		end
 	end
+	if not motors.RootJoint and motors.Root then
+		motors.RootJoint = motors.Root
+	end
+	local modelBasePoses = basePoses[model]
+	if not modelBasePoses then
+		modelBasePoses = {}
+		basePoses[model] = modelBasePoses
+	end
+	for name, motor in pairs(motors) do
+		if not modelBasePoses[name] then
+			modelBasePoses[name] = motor.C0
+		end
+	end
 	return motors
 end
 
 local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
 	if not motor then return nil end
-	easingStyle = easingStyle or Enum.EasingStyle.Quad
-	easingDir = easingDir or Enum.EasingDirection.Out
+	duration = math.max(duration or 0.1, 0.06)
+
+	-- Auto-adapt: preserve the rig's base position, apply animation rotation.
+	-- This lets R6-authored animations work on R15 rigs automatically.
+	local model = motor.Parent and motor.Parent.Parent
+	if model and basePoses[model] and basePoses[model][motor.Name] then
+		local baseC0 = basePoses[model][motor.Name]
+		local rotOnly = targetC0 - targetC0.Position
+		targetC0 = CFrame.new(baseC0.Position) * rotOnly
+	end
+
+	easingStyle = easingStyle or Enum.EasingStyle.Sine
+	easingDir = easingDir or Enum.EasingDirection.InOut
 	local tween = TweenService:Create(motor, TweenInfo.new(duration, easingStyle, easingDir), {
 		C0 = targetC0
 	})
@@ -56,11 +82,28 @@ local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
 	return tween
 end
 
+local function cancelQueuedReset(model)
+	if not model then return end
+	resetTokens[model] = (resetTokens[model] or 0) + 1
+end
+
+local function queueReset(model, delayTime, duration)
+	if not model then return end
+	cancelQueuedReset(model)
+	local token = resetTokens[model]
+	task.delay(delayTime, function()
+		if not model or resetTokens[model] ~= token then return end
+		AnimationManager.ResetPose(model, duration)
+	end)
+end
+
 function AnimationManager.ResetPose(model, duration)
+	cancelQueuedReset(model)
 	duration = duration or 0.2
 	local motors = getAllMotors(model)
+	local modelBasePoses = basePoses[model]
 	for name, motor in pairs(motors) do
-		local rest = REST_POSES[name]
+		local rest = (modelBasePoses and modelBasePoses[name]) or REST_POSES[name]
 		if rest then
 			tweenMotor(motor, rest, duration)
 		end
@@ -69,14 +112,23 @@ end
 
 function AnimationManager.HasJoints(model)
 	return getMotor(model, "RightShoulder") ~= nil
+		or getMotor(model, "Right Shoulder") ~= nil
 end
 
 ------------------------------------------------------------
 -- JOINT SETUP
 ------------------------------------------------------------
 function AnimationManager.SetupJoints(model, scaleMultiplier)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.RigType == Enum.HumanoidRigType.R15 then
+		return
+	end
+	if AnimationManager.HasJoints(model) then
+		return
+	end
+
 	local s = scaleMultiplier or 1
-	local torso = model:FindFirstChild("HumanoidRootPart")
+	local torso = model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
 	if not torso then return end
 
 	local head = model:FindFirstChild("Head")
@@ -147,6 +199,7 @@ end
 ------------------------------------------------------------
 
 function AnimationManager.PlayLightPunch(model, comboIndex)
+	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -170,9 +223,7 @@ function AnimationManager.PlayLightPunch(model, comboIndex)
 		if motors.LeftHip then
 			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
 		end
-		task.delay(0.15, function()
-			AnimationManager.ResetPose(model, 0.12)
-		end)
+		queueReset(model, 0.15, 0.12)
 
 	elseif comboIndex == 2 then
 		-- Cross: left arm with big twist
@@ -190,9 +241,7 @@ function AnimationManager.PlayLightPunch(model, comboIndex)
 		if motors.RightHip then
 			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
 		end
-		task.delay(0.15, function()
-			AnimationManager.ResetPose(model, 0.12)
-		end)
+		queueReset(model, 0.15, 0.12)
 
 	elseif comboIndex == 3 then
 		-- Hook: dramatic side swing with full body rotation
@@ -212,9 +261,7 @@ function AnimationManager.PlayLightPunch(model, comboIndex)
 				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(25)),
 				0.05)
 		end
-		task.delay(0.18, function()
-			AnimationManager.ResetPose(model, 0.15)
-		end)
+		queueReset(model, 0.18, 0.15)
 
 	elseif comboIndex == 4 then
 		-- UPPERCUT: BIG wind down then explosive upward (player also jumps via CombatController)
@@ -258,14 +305,13 @@ function AnimationManager.PlayLightPunch(model, comboIndex)
 			end
 		end)
 
-		task.delay(0.3, function()
-			AnimationManager.ResetPose(model, 0.25)
-		end)
+		queueReset(model, 0.3, 0.25)
 	end
 end
 
 -- Heavy punch - BIGGER wind-up, more dramatic forward lunge
 function AnimationManager.PlayHeavyPunch(model)
+	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -316,12 +362,11 @@ function AnimationManager.PlayHeavyPunch(model)
 		end
 	end)
 
-	task.delay(0.45, function()
-		AnimationManager.ResetPose(model, 0.3)
-	end)
+	queueReset(model, 0.45, 0.3)
 end
 
 function AnimationManager.PlayBlock(model)
+	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -347,6 +392,7 @@ function AnimationManager.PlayUnblock(model)
 end
 
 function AnimationManager.PlayDodge(model)
+	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RootJoint then return end
@@ -369,13 +415,12 @@ function AnimationManager.PlayDodge(model)
 		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(25), 0, 0), 0.08)
 	end
 
-	task.delay(0.35, function()
-		AnimationManager.ResetPose(model, 0.2)
-	end)
+	queueReset(model, 0.35, 0.2)
 end
 
 -- Hit reaction: MORE DRAMATIC — bigger stagger, spin on heavy hits
 function AnimationManager.PlayHitReaction(model, isHeavy)
+	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 
@@ -404,9 +449,7 @@ function AnimationManager.PlayHitReaction(model, isHeavy)
 		if motors.LeftHip then
 			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.06)
 		end
-		task.delay(0.35, function()
-			AnimationManager.ResetPose(model, 0.3)
-		end)
+		queueReset(model, 0.35, 0.3)
 	else
 		-- Light hit: snap backward flinch (enhanced)
 		if motors.RootJoint then
@@ -425,9 +468,7 @@ function AnimationManager.PlayHitReaction(model, isHeavy)
 				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(-40)),
 				0.05)
 		end
-		task.delay(0.2, function()
-			AnimationManager.ResetPose(model, 0.2)
-		end)
+		queueReset(model, 0.2, 0.2)
 	end
 end
 
@@ -436,6 +477,7 @@ end
 ------------------------------------------------------------
 
 function AnimationManager.PlayThugAttack(model, hitIndex)
+	cancelQueuedReset(model)
 	local s = 1.0
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -463,12 +505,11 @@ function AnimationManager.PlayThugAttack(model, hitIndex)
 		end
 	end)
 
-	task.delay(0.35, function()
-		AnimationManager.ResetPose(model, 0.2)
-	end)
+	queueReset(model, 0.35, 0.2)
 end
 
 function AnimationManager.PlayThugTaunt(model)
+	cancelQueuedReset(model)
 	local s = 1.0
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder or not motors.LeftShoulder then return end
@@ -498,12 +539,11 @@ function AnimationManager.PlayThugTaunt(model)
 			0.08, Enum.EasingStyle.Back)
 	end)
 
-	task.delay(1.0, function()
-		AnimationManager.ResetPose(model, 0.3)
-	end)
+	queueReset(model, 1.0, 0.3)
 end
 
 function AnimationManager.PlayBrawlerAttack(model, hitIndex)
+	cancelQueuedReset(model)
 	local s = 1.3
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -525,9 +565,7 @@ function AnimationManager.PlayBrawlerAttack(model, hitIndex)
 				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-10), math.rad(-40), 0), 0.1)
 			end
 		end)
-		task.delay(0.55, function()
-			AnimationManager.ResetPose(model, 0.25)
-		end)
+		queueReset(model, 0.55, 0.25)
 
 	elseif hitIndex == 2 then
 		if motors.RootJoint then
@@ -554,9 +592,7 @@ function AnimationManager.PlayBrawlerAttack(model, hitIndex)
 					0.1, Enum.EasingStyle.Back)
 			end
 		end)
-		task.delay(0.5, function()
-			AnimationManager.ResetPose(model, 0.3)
-		end)
+		queueReset(model, 0.5, 0.3)
 
 	elseif hitIndex == 3 then
 		if motors.RightHip then
@@ -594,13 +630,12 @@ function AnimationManager.PlayBrawlerAttack(model, hitIndex)
 			end
 		end)
 
-		task.delay(0.5, function()
-			AnimationManager.ResetPose(model, 0.3)
-		end)
+		queueReset(model, 0.5, 0.3)
 	end
 end
 
 function AnimationManager.PlayBrawlerTaunt(model)
+	cancelQueuedReset(model)
 	local s = 1.3
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder or not motors.LeftShoulder then return end
@@ -640,12 +675,11 @@ function AnimationManager.PlayBrawlerTaunt(model)
 			0.15)
 	end)
 
-	task.delay(1.5, function()
-		AnimationManager.ResetPose(model, 0.3)
-	end)
+	queueReset(model, 1.5, 0.3)
 end
 
 function AnimationManager.PlaySpeedsterAttack(model, hitIndex)
+	cancelQueuedReset(model)
 	local s = 0.85
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
@@ -672,9 +706,7 @@ function AnimationManager.PlaySpeedsterAttack(model, hitIndex)
 			tweenMotor(motors.RootJoint, CFrame.Angles(0, math.rad(xSign * -8), 0), 0.05)
 		end
 
-		task.delay(0.1, function()
-			AnimationManager.ResetPose(model, 0.06)
-		end)
+		queueReset(model, 0.1, 0.06)
 
 	elseif hitIndex == 4 then
 		if motors.RootJoint then
@@ -700,13 +732,12 @@ function AnimationManager.PlaySpeedsterAttack(model, hitIndex)
 			end
 		end)
 
-		task.delay(0.3, function()
-			AnimationManager.ResetPose(model, 0.2)
-		end)
+		queueReset(model, 0.3, 0.2)
 	end
 end
 
 function AnimationManager.PlaySpeedsterTaunt(model)
+	cancelQueuedReset(model)
 	local s = 0.85
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder or not motors.LeftShoulder then return end
@@ -736,9 +767,7 @@ function AnimationManager.PlaySpeedsterTaunt(model)
 		end)
 	end
 
-	task.delay(1.0, function()
-		AnimationManager.ResetPose(model, 0.2)
-	end)
+	queueReset(model, 1.0, 0.2)
 end
 
 ------------------------------------------------------------

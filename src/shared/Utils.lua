@@ -1,135 +1,152 @@
 -- Utils: Shared utility functions
 local Utils = {}
-local AnimationManager -- lazy-loaded to avoid circular dependency
 
--- Create a humanoid NPC model from scratch
-function Utils.CreateNPCModel(name, position, color, scaleMultiplier)
+local function createWeldedPart(model, parentPart, name, size, offset, color, material, shape)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.CFrame = parentPart.CFrame * offset
+	part.BrickColor = color
+	part.Material = material or Enum.Material.SmoothPlastic
+	part.Shape = shape or Enum.PartType.Block
+	part.Anchored = false
+	part.CanCollide = false
+	part.Massless = true
+	part.Parent = model
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = parentPart
+	weld.Part1 = part
+	weld.Parent = part
+
+	return part
+end
+
+local function applyEnemyStyle(model, enemyType, torso, head, leftArm, rightArm, leftLeg, rightLeg, scaleMultiplier)
+	local s = scaleMultiplier or 1
+	enemyType = enemyType or model.Name
+	if not torso or not head then return end
+
+	if enemyType == "Thug" then
+		torso.BrickColor = BrickColor.new("Black")
+		torso.Material = Enum.Material.Fabric
+		if leftArm then leftArm.BrickColor = BrickColor.new("Smoky grey") end
+		if rightArm then rightArm.BrickColor = BrickColor.new("Smoky grey") end
+		if leftLeg then leftLeg.BrickColor = BrickColor.new("Really black") end
+		if rightLeg then rightLeg.BrickColor = BrickColor.new("Really black") end
+		if head:IsA("Part") then
+			head.Shape = Enum.PartType.Block
+		end
+		head.BrickColor = BrickColor.new("Pastel brown")
+
+		createWeldedPart(
+			model,
+			torso,
+			"JacketLayer",
+			Vector3.new(2.2 * s, 2.2 * s, 1.15 * s),
+			CFrame.new(0, 0, 0),
+			BrickColor.new("Dark stone grey"),
+			Enum.Material.Fabric
+		)
+		createWeldedPart(
+			model,
+			head,
+			"Beanie",
+			Vector3.new(1.3 * s, 0.35 * s, 1.3 * s),
+			CFrame.new(0, 0.5 * s, 0),
+			BrickColor.new("Really black"),
+			Enum.Material.Fabric
+		)
+	elseif enemyType == "Brawler" then
+		torso.BrickColor = BrickColor.new("Reddish brown")
+		torso.Material = Enum.Material.Metal
+		if leftArm then leftArm.BrickColor = BrickColor.new("Dark orange") end
+		if rightArm then rightArm.BrickColor = BrickColor.new("Dark orange") end
+		if leftLeg then leftLeg.BrickColor = BrickColor.new("Brown") end
+		if rightLeg then rightLeg.BrickColor = BrickColor.new("Brown") end
+		if head:IsA("Part") then
+			head.Shape = Enum.PartType.Block
+		end
+		head.BrickColor = BrickColor.new("Brown")
+
+		createWeldedPart(
+			model,
+			torso,
+			"ChestPlate",
+			Vector3.new(2.25 * s, 1.1 * s, 0.35 * s),
+			CFrame.new(0, 0.35 * s, -0.65 * s),
+			BrickColor.new("Really black"),
+			Enum.Material.Metal
+		)
+		if leftArm then
+			createWeldedPart(
+				model,
+				leftArm,
+				"LeftShoulderPad",
+				Vector3.new(0.9 * s, 0.5 * s, 0.9 * s),
+				CFrame.new(0, 0.85 * s, 0),
+				BrickColor.new("Black"),
+				Enum.Material.Metal
+			)
+		end
+		if rightArm then
+			createWeldedPart(
+				model,
+				rightArm,
+				"RightShoulderPad",
+				Vector3.new(0.9 * s, 0.5 * s, 0.9 * s),
+				CFrame.new(0, 0.85 * s, 0),
+				BrickColor.new("Black"),
+				Enum.Material.Metal
+			)
+		end
+	elseif enemyType == "Speedster" then
+		torso.BrickColor = BrickColor.new("Institutional white")
+		torso.Material = Enum.Material.SmoothPlastic
+		if leftArm then leftArm.BrickColor = BrickColor.new("New Yeller") end
+		if rightArm then rightArm.BrickColor = BrickColor.new("New Yeller") end
+		if leftLeg then leftLeg.BrickColor = BrickColor.new("Really black") end
+		if rightLeg then rightLeg.BrickColor = BrickColor.new("Really black") end
+		head.BrickColor = BrickColor.new("Pastel yellow")
+
+		createWeldedPart(
+			model,
+			torso,
+			"SpeedStripe",
+			Vector3.new(2.15 * s, 0.35 * s, 0.2 * s),
+			CFrame.new(0, 0.1 * s, -0.6 * s),
+			BrickColor.new("Really red"),
+			Enum.Material.Neon
+		)
+		createWeldedPart(
+			model,
+			head,
+			"Visor",
+			Vector3.new(1.0 * s, 0.4 * s, 0.2 * s),
+			CFrame.new(0, 0.1 * s, -0.55 * s),
+			BrickColor.new("Cyan"),
+			Enum.Material.Neon
+		)
+	end
+end
+
+-- Create a humanoid NPC model from scratch (R15 rig via CharacterBuilder)
+function Utils.CreateNPCModel(name, position, color, scaleMultiplier, enemyType)
 	scaleMultiplier = scaleMultiplier or 1
-	local s = scaleMultiplier
+	local s = math.max(0.7, scaleMultiplier)
 
-	local model = Instance.new("Model")
-	model.Name = name
+	local CharacterBuilder = require(script.Parent:WaitForChild("CharacterBuilder"))
+	local model = CharacterBuilder.Build(name, position, color, s)
 
-	-- Torso (HumanoidRootPart)
-	local torso = Instance.new("Part")
-	torso.Name = "HumanoidRootPart"
-	torso.Size = Vector3.new(2 * s, 2 * s, 1 * s)
-	torso.CFrame = CFrame.new(position) + Vector3.new(0, 3 * s, 0)
-	torso.BrickColor = color
-	torso.Anchored = false
-	torso.CanCollide = true
-	torso.Material = Enum.Material.SmoothPlastic
-	torso.Parent = model
+	-- Apply cosmetic enemy style overlays
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso")
+	local head = model:FindFirstChild("Head")
+	local leftArm = model:FindFirstChild("LeftUpperArm")
+	local rightArm = model:FindFirstChild("RightUpperArm")
+	local leftLeg = model:FindFirstChild("LeftUpperLeg")
+	local rightLeg = model:FindFirstChild("RightUpperLeg")
 
-	-- Head
-	local head = Instance.new("Part")
-	head.Name = "Head"
-	head.Shape = Enum.PartType.Ball
-	head.Size = Vector3.new(1.2 * s, 1.2 * s, 1.2 * s)
-	head.CFrame = torso.CFrame + Vector3.new(0, 1.6 * s, 0)
-	head.BrickColor = BrickColor.new("Light orange")
-	head.Anchored = false
-	head.CanCollide = false
-	head.Material = Enum.Material.SmoothPlastic
-	head.Parent = model
-
-	local headWeld = Instance.new("WeldConstraint")
-	headWeld.Part0 = torso
-	headWeld.Part1 = head
-	headWeld.Parent = head
-
-	-- Face on head
-	local face = Instance.new("Decal")
-	face.Name = "face"
-	face.Face = Enum.NormalId.Front
-	face.Parent = head
-
-	-- Left Arm
-	local leftArm = Instance.new("Part")
-	leftArm.Name = "Left Arm"
-	leftArm.Size = Vector3.new(0.6 * s, 2 * s, 0.6 * s)
-	leftArm.CFrame = torso.CFrame + Vector3.new(-1.3 * s, 0, 0)
-	leftArm.BrickColor = color
-	leftArm.Anchored = false
-	leftArm.CanCollide = false
-	leftArm.Material = Enum.Material.SmoothPlastic
-	leftArm.Parent = model
-
-	local laWeld = Instance.new("WeldConstraint")
-	laWeld.Part0 = torso
-	laWeld.Part1 = leftArm
-	laWeld.Parent = leftArm
-
-	-- Right Arm
-	local rightArm = Instance.new("Part")
-	rightArm.Name = "Right Arm"
-	rightArm.Size = Vector3.new(0.6 * s, 2 * s, 0.6 * s)
-	rightArm.CFrame = torso.CFrame + Vector3.new(1.3 * s, 0, 0)
-	rightArm.BrickColor = color
-	rightArm.Anchored = false
-	rightArm.CanCollide = false
-	rightArm.Material = Enum.Material.SmoothPlastic
-	rightArm.Parent = model
-
-	local raWeld = Instance.new("WeldConstraint")
-	raWeld.Part0 = torso
-	raWeld.Part1 = rightArm
-	raWeld.Parent = rightArm
-
-	-- Left Leg
-	local leftLeg = Instance.new("Part")
-	leftLeg.Name = "Left Leg"
-	leftLeg.Size = Vector3.new(0.7 * s, 2 * s, 0.7 * s)
-	leftLeg.CFrame = torso.CFrame + Vector3.new(-0.5 * s, -2 * s, 0)
-	leftLeg.BrickColor = BrickColor.new("Dark stone grey")
-	leftLeg.Anchored = false
-	leftLeg.CanCollide = false
-	leftLeg.Material = Enum.Material.SmoothPlastic
-	leftLeg.Parent = model
-
-	local llWeld = Instance.new("WeldConstraint")
-	llWeld.Part0 = torso
-	llWeld.Part1 = leftLeg
-	llWeld.Parent = leftLeg
-
-	-- Right Leg
-	local rightLeg = Instance.new("Part")
-	rightLeg.Name = "Right Leg"
-	rightLeg.Size = Vector3.new(0.7 * s, 2 * s, 0.7 * s)
-	rightLeg.CFrame = torso.CFrame + Vector3.new(0.5 * s, -2 * s, 0)
-	rightLeg.BrickColor = BrickColor.new("Dark stone grey")
-	rightLeg.Anchored = false
-	rightLeg.CanCollide = false
-	rightLeg.Material = Enum.Material.SmoothPlastic
-	rightLeg.Parent = model
-
-	local rlWeld = Instance.new("WeldConstraint")
-	rlWeld.Part0 = torso
-	rlWeld.Part1 = rightLeg
-	rlWeld.Parent = rightLeg
-
-	-- Humanoid
-	local humanoid = Instance.new("Humanoid")
-	humanoid.Parent = model
-	humanoid.MaxHealth = 100
-	humanoid.Health = 100
-	humanoid.WalkSpeed = 16
-	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Subject
-	humanoid.HealthDisplayDistance = 50
-	humanoid.NameDisplayDistance = 50
-
-	model.PrimaryPart = torso
-
-	-- Set up Motor6D joints for animation
-	if not AnimationManager then
-		local ok, mod = pcall(function()
-			return require(script.Parent:WaitForChild("AnimationManager", 2))
-		end)
-		if ok then AnimationManager = mod end
-	end
-	if AnimationManager then
-		AnimationManager.SetupJoints(model, scaleMultiplier)
-	end
+	applyEnemyStyle(model, enemyType, torso, head, leftArm, rightArm, leftLeg, rightLeg, s)
 
 	return model
 end

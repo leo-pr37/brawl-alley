@@ -5,8 +5,10 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 ## Features
 
 - **3D Beat-em-up Combat** — Light attacks, heavy attacks, combos, blocking, and dodging
+- **R15 Character Rig** — Player and enemy fighters use R15 rigs for less boxy silhouettes and smoother joint motion
 - **3 Enemy Types** — Thugs (basic), Brawlers (tanky), Speedsters (fast)
-- **Wave System** — 8 handcrafted waves + endless procedural generation
+- **Level Selector + Difficulty** — Choose Alley District, Subway Yard, or Rooftop Run with Easy/Normal/Hard before starting
+- **Wave System** — 8 handcrafted opening waves per level + endless procedural generation
 - **Co-op Multiplayer** — Fight together with friends
 - **Full HUD** — Health bar, score, combo counter, wave indicator
 - **Game Loop** — Start screen → gameplay → game over → restart
@@ -85,7 +87,7 @@ foreman install
 ### Play Testing
 
 1. With Rojo connected, press **Play** (F5) in Studio
-2. The game starts automatically after a brief loading screen
+2. On the start screen, select a level and difficulty, then press **START BRAWL**
 3. For co-op testing, use **Test → Start** with 2+ players
 
 ## Project Structure

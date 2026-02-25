@@ -11,6 +11,8 @@ local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
 
 local UserInputService = game:GetService("UserInputService")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -27,6 +29,7 @@ local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
 local EnemyHitEvent = ReplicatedStorage:WaitForChild("EnemyHitEvent")
 local PlayerDiedEvent = ReplicatedStorage:WaitForChild("PlayerDiedEvent")
 local RequestRestartEvent = ReplicatedStorage:WaitForChild("RequestRestartEvent")
+local RequestGameStartEvent = ReplicatedStorage:WaitForChild("RequestGameStartEvent")
 local SpawnEffectEvent = ReplicatedStorage:WaitForChild("SpawnEffectEvent")
 
 ------------------------------------------------------------
@@ -37,6 +40,10 @@ screenGui.Name = "BrawlAlleyUI"
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
+
+_G.MouseFree = true
+UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+UserInputService.MouseIconEnabled = true
 
 -- ===== HEALTH BAR =====
 local healthFrame = Instance.new("Frame")
@@ -171,6 +178,15 @@ startScreen.BorderSizePixel = 0
 startScreen.ZIndex = 20
 startScreen.Parent = screenGui
 
+local backgroundOverlay = Instance.new("Frame")
+backgroundOverlay.Name = "BackgroundOverlay"
+backgroundOverlay.Size = UDim2.new(1, 0, 1, 0)
+backgroundOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+backgroundOverlay.BackgroundTransparency = 0.35
+backgroundOverlay.BorderSizePixel = 0
+backgroundOverlay.ZIndex = 20
+backgroundOverlay.Parent = startScreen
+
 local titleLabel = Instance.new("TextLabel")
 titleLabel.Name = "Title"
 titleLabel.Size = UDim2.new(0.8, 0, 0.2, 0)
@@ -200,17 +216,19 @@ subtitleLabel.Parent = startScreen
 
 local controlsLabel = Instance.new("TextLabel")
 controlsLabel.Name = "Controls"
-controlsLabel.Size = UDim2.new(0.6, 0, 0.3, 0)
-controlsLabel.Position = UDim2.new(0.2, 0, 0.5, 0)
+controlsLabel.Size = UDim2.new(0.6, 0, 0.28, 0)
+controlsLabel.Position = UDim2.new(0.2, 0, 0.46, 0)
 controlsLabel.BackgroundTransparency = 1
 controlsLabel.Text = [[CONTROLS:
 WASD - Move
 Left Click - Light Attack
 Hold Left Click - Heavy Attack
+Left Click (holding item) - Swing/Throw Item
 Right Click - Block
 Shift / Q - Dodge
-
-Survive the waves!]]
+E - Pick Up Item
+ 
+Select your level and difficulty, then start!]]
 controlsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 controlsLabel.Font = Enum.Font.Gotham
 controlsLabel.TextSize = 18
@@ -218,17 +236,154 @@ controlsLabel.TextStrokeTransparency = 0.5
 controlsLabel.ZIndex = 21
 controlsLabel.Parent = startScreen
 
+local levelKeys = EnemyTypes.LevelOrder or {EnemyTypes.DefaultLevel or "Alley"}
+if #levelKeys == 0 then
+	table.insert(levelKeys, EnemyTypes.DefaultLevel or "Alley")
+end
+local difficultyOptions = {"Easy", "Normal", "Hard"}
+
+local function getLevelDisplayName(levelKey)
+	local level = EnemyTypes.GetLevel(levelKey)
+	return level and level.DisplayName or levelKey
+end
+
+local function createSelector(parent, titleText, yScale, options, formatter)
+	local container = Instance.new("Frame")
+	container.Name = titleText .. "Selector"
+	container.Size = UDim2.new(0.52, 0, 0.08, 0)
+	container.Position = UDim2.new(0.24, 0, yScale, 0)
+	container.BackgroundTransparency = 1
+	container.ZIndex = 21
+	container.Parent = parent
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(0.3, 0, 1, 0)
+	title.BackgroundTransparency = 1
+	title.Text = titleText .. ":"
+	title.TextColor3 = Color3.fromRGB(220, 220, 220)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 18
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 21
+	title.Parent = container
+
+	local left = Instance.new("TextButton")
+	left.Size = UDim2.new(0, 36, 0, 36)
+	left.Position = UDim2.new(0.34, 0, 0.5, -18)
+	left.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	left.Text = "<"
+	left.TextColor3 = Color3.new(1, 1, 1)
+	left.Font = Enum.Font.GothamBlack
+	left.TextSize = 24
+	left.ZIndex = 21
+	left.Parent = container
+	local leftCorner = Instance.new("UICorner")
+	leftCorner.CornerRadius = UDim.new(0, 8)
+	leftCorner.Parent = left
+
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Size = UDim2.new(0.42, 0, 1, 0)
+	valueLabel.Position = UDim2.new(0.46, 0, 0, 0)
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.TextColor3 = Color3.fromRGB(255, 200, 80)
+	valueLabel.Font = Enum.Font.GothamBold
+	valueLabel.TextSize = 18
+	valueLabel.ZIndex = 21
+	valueLabel.Parent = container
+
+	local right = Instance.new("TextButton")
+	right.Size = UDim2.new(0, 36, 0, 36)
+	right.Position = UDim2.new(0.9, 0, 0.5, -18)
+	right.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	right.Text = ">"
+	right.TextColor3 = Color3.new(1, 1, 1)
+	right.Font = Enum.Font.GothamBlack
+	right.TextSize = 24
+	right.ZIndex = 21
+	right.Parent = container
+	local rightCorner = Instance.new("UICorner")
+	rightCorner.CornerRadius = UDim.new(0, 8)
+	rightCorner.Parent = right
+
+	local idx = 1
+	local function updateLabel()
+		local value = options[idx]
+		if formatter then
+			value = formatter(value)
+		end
+		valueLabel.Text = value
+	end
+
+	left.MouseButton1Click:Connect(function()
+		idx = idx - 1
+		if idx < 1 then idx = #options end
+		updateLabel()
+	end)
+
+	right.MouseButton1Click:Connect(function()
+		idx = idx + 1
+		if idx > #options then idx = 1 end
+		updateLabel()
+	end)
+
+	local selector = {}
+	function selector.GetValue()
+		return options[idx]
+	end
+
+	function selector.SetValue(value)
+		for i, option in ipairs(options) do
+			if option == value then
+				idx = i
+				break
+			end
+		end
+		updateLabel()
+	end
+
+	updateLabel()
+	return selector
+end
+
+local levelSelector = createSelector(startScreen, "LEVEL", 0.7, levelKeys, getLevelDisplayName)
+local difficultySelector = createSelector(startScreen, "DIFFICULTY", 0.78, difficultyOptions)
+
+local startGameButton = Instance.new("TextButton")
+startGameButton.Name = "StartGameButton"
+startGameButton.Size = UDim2.new(0.3, 0, 0.08, 0)
+startGameButton.Position = UDim2.new(0.35, 0, 0.86, 0)
+startGameButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+startGameButton.Text = "START BRAWL"
+startGameButton.TextColor3 = Color3.new(1, 1, 1)
+startGameButton.Font = Enum.Font.GothamBlack
+startGameButton.TextSize = 24
+startGameButton.ZIndex = 21
+startGameButton.Parent = startScreen
+local startButtonCorner = Instance.new("UICorner")
+startButtonCorner.CornerRadius = UDim.new(0, 10)
+startButtonCorner.Parent = startGameButton
+
 local waitingLabel = Instance.new("TextLabel")
 waitingLabel.Name = "Waiting"
-waitingLabel.Size = UDim2.new(0.5, 0, 0.08, 0)
-waitingLabel.Position = UDim2.new(0.25, 0, 0.85, 0)
+waitingLabel.Size = UDim2.new(0.7, 0, 0.05, 0)
+waitingLabel.Position = UDim2.new(0.15, 0, 0.94, 0)
 waitingLabel.BackgroundTransparency = 1
-waitingLabel.Text = "Game starting..."
+waitingLabel.Text = "Waiting for start..."
 waitingLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 waitingLabel.Font = Enum.Font.GothamBold
-waitingLabel.TextSize = 22
+waitingLabel.TextSize = 18
 waitingLabel.ZIndex = 21
 waitingLabel.Parent = startScreen
+
+startGameButton.MouseButton1Click:Connect(function()
+	local selectedLevel = levelSelector.GetValue()
+	local selectedDifficulty = difficultySelector.GetValue()
+	waitingLabel.Text = "Starting " .. getLevelDisplayName(selectedLevel) .. " (" .. selectedDifficulty .. ")..."
+	startGameButton.Text = "STARTING..."
+	startGameButton.AutoButtonColor = false
+	startGameButton.Active = false
+	RequestGameStartEvent:FireServer(selectedLevel, selectedDifficulty)
+end)
 
 -- Pulse animation for waiting text
 task.spawn(function()
@@ -311,10 +466,28 @@ local currentWave = 0
 -- Game state changes
 GameStateEvent.OnClientEvent:Connect(function(state, data)
 	if state == "GameStart" then
+		if typeof(data) == "table" then
+			if data.level then
+				levelSelector.SetValue(data.level)
+			end
+			if data.difficulty then
+				difficultySelector.SetValue(data.difficulty)
+			end
+			local levelName = data.levelName or getLevelDisplayName(levelSelector.GetValue())
+			local difficultyName = data.difficulty or difficultySelector.GetValue()
+			waitingLabel.Text = "Starting " .. levelName .. " (" .. difficultyName .. ")..."
+		end
+
 		-- Hide start screen
 		TweenService:Create(startScreen, TweenInfo.new(1), {BackgroundTransparency = 1}):Play()
+		TweenService:Create(backgroundOverlay, TweenInfo.new(1), {BackgroundTransparency = 1}):Play()
 		task.wait(1)
 		startScreen.Visible = false
+		startGameButton.Text = "START BRAWL"
+		startGameButton.AutoButtonColor = true
+		startGameButton.Active = true
+		waitingLabel.Text = "Waiting for start..."
+		backgroundOverlay.BackgroundTransparency = 0.35
 
 		-- Hide game over screen
 		gameOverScreen.Visible = false

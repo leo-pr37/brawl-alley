@@ -12,6 +12,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
+if _G.MouseFree == nil then
+	_G.MouseFree = true
+end
 
 -- Camera settings
 local CAMERA_DISTANCE = 10        -- distance behind player
@@ -42,8 +45,14 @@ end
 
 local function setupCamera()
 	camera.CameraType = Enum.CameraType.Scriptable
-	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-	mouseLocked = true
+	if _G.MouseFree then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		UserInputService.MouseIconEnabled = true
+		mouseLocked = false
+	else
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+		mouseLocked = true
+	end
 	initialized = true
 end
 
@@ -59,6 +68,9 @@ end)
 UserInputService.WindowFocused:Connect(function()
 	if initialized and not _G.MouseFree then
 		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	else
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		UserInputService.MouseIconEnabled = true
 	end
 end)
 
@@ -85,6 +97,13 @@ RunService.RenderStepped:Connect(function(dt)
 		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
 			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
 		end
+		mouseLocked = true
+	else
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
+		UserInputService.MouseIconEnabled = true
+		mouseLocked = false
 	end
 
 	-- Calculate camera position behind and above player

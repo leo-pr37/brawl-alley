@@ -7,6 +7,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local Debris = game:GetService("Debris")
 
 -- Wait for shared modules
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -14,6 +15,7 @@ local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
 local Utils = require(Shared:WaitForChild("Utils"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
+local ArenaBuilder = require(script.Parent:WaitForChild("ArenaBuilder"))
 
 -- Create RemoteEvents for client-server communication
 local function createRemote(className, name)
@@ -30,10 +32,15 @@ local ScoreEvent = createRemote("RemoteEvent", "ScoreEvent")
 local EnemyHitEvent = createRemote("RemoteEvent", "EnemyHitEvent")
 local PlayerDiedEvent = createRemote("RemoteEvent", "PlayerDiedEvent")
 local RequestRestartEvent = createRemote("RemoteEvent", "RequestRestartEvent")
+local RequestGameStartEvent = createRemote("RemoteEvent", "RequestGameStartEvent")
 local SpawnEffectEvent = createRemote("RemoteEvent", "SpawnEffectEvent")
 local EnemyAnimEvent = createRemote("RemoteEvent", "EnemyAnimEvent")
 local ScreenShakeEvent = createRemote("RemoteEvent", "ScreenShakeEvent")
 local ComicBubbleEvent = createRemote("RemoteEvent", "ComicBubbleEvent")
+local ItemInteractEvent = createRemote("RemoteEvent", "ItemInteractEvent")
+local HeldItemStateEvent = createRemote("RemoteEvent", "HeldItemStateEvent")
+local BlockEvent = createRemote("RemoteEvent", "BlockEvent")
+local DodgeEvent = createRemote("RemoteEvent", "DodgeEvent")
 
 -- Game state
 local gameState = "Lobby" -- Lobby, Playing, GameOver
@@ -42,6 +49,21 @@ local enemiesAlive = 0
 local totalScore = 0 -- shared score for co-op
 local playerScores = {} -- per-player scores
 local playerDeaths = {} -- track dead players
+local heldItems = {}
+local itemUseCooldowns = {}
+local itemSpawnerRunning = false
+local DIFFICULTY_SETTINGS = {
+	Easy = {HealthMultiplier = 0.8, DamageMultiplier = 0.8, SpeedMultiplier = 0.9},
+	Normal = {HealthMultiplier = 1.0, DamageMultiplier = 1.0, SpeedMultiplier = 1.0},
+	Hard = {HealthMultiplier = 1.25, DamageMultiplier = 1.25, SpeedMultiplier = 1.1},
+}
+local DEFAULT_DIFFICULTY = "Normal"
+local currentSelectedLevel = EnemyTypes.DefaultLevel
+local currentSelectedDifficulty = DEFAULT_DIFFICULTY
+local currentDifficultySettings = DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY]
+
+-- R15 is now handled by CharacterBuilder (shared) for NPCs
+-- and game avatar settings for player characters.
 
 -- Folders
 local enemiesFolder = Instance.new("Folder")
@@ -52,172 +74,253 @@ local arenaFolder = Instance.new("Folder")
 arenaFolder.Name = "Arena"
 arenaFolder.Parent = workspace
 
+local groundItemsFolder = Instance.new("Folder")
+groundItemsFolder.Name = "GroundItems"
+groundItemsFolder.Parent = workspace
+
 -- Arena dimensions
 local ARENA_WIDTH = 80
 local ARENA_DEPTH = 50
 local ARENA_CENTER = Vector3.new(0, 0, 0)
 
-------------------------------------------------------------
--- SPAWN POINTS (edges/entrances of arena)
-------------------------------------------------------------
-local SPAWN_POINTS = {
-	-- Left alley mouth
-	{pos = Vector3.new(-ARENA_WIDTH/2 + 3, 3, -10), name = "LeftAlley1"},
-	{pos = Vector3.new(-ARENA_WIDTH/2 + 3, 3, 10), name = "LeftAlley2"},
-	-- Right alley mouth
-	{pos = Vector3.new(ARENA_WIDTH/2 - 3, 3, -10), name = "RightAlley1"},
-	{pos = Vector3.new(ARENA_WIDTH/2 - 3, 3, 10), name = "RightAlley2"},
-	-- Back wall (behind dumpsters/crates)
-	{pos = Vector3.new(-20, 3, -ARENA_DEPTH/2 + 3), name = "BackLeft"},
-	{pos = Vector3.new(15, 3, -ARENA_DEPTH/2 + 3), name = "BackRight"},
-	-- Front entrance
-	{pos = Vector3.new(0, 3, ARENA_DEPTH/2 - 3), name = "FrontCenter"},
-	-- Rooftop drop points (spawn higher, they fall down)
-	{pos = Vector3.new(-25, 12, -5), name = "RooftopLeft"},
-	{pos = Vector3.new(30, 12, 5), name = "RooftopRight"},
-}
-
-------------------------------------------------------------
--- ARENA BUILDING
-------------------------------------------------------------
-local function buildArena()
-	-- Clear old arena
-	arenaFolder:ClearAllChildren()
-
-	-- Ground
-	local ground = Instance.new("Part")
-	ground.Name = "Ground"
-	ground.Size = Vector3.new(ARENA_WIDTH + 20, 1, ARENA_DEPTH + 20)
-	ground.Position = Vector3.new(0, -0.5, 0)
-	ground.Anchored = true
-	ground.BrickColor = BrickColor.new("Dark stone grey")
-	ground.Material = Enum.Material.Concrete
-	ground.Parent = arenaFolder
-
-	-- Street lines
-	for i = -ARENA_WIDTH/2, ARENA_WIDTH/2, 10 do
-		local line = Instance.new("Part")
-		line.Name = "StreetLine"
-		line.Size = Vector3.new(1, 0.05, 4)
-		line.Position = Vector3.new(i, 0.03, 0)
-		line.Anchored = true
-		line.BrickColor = BrickColor.new("Institutional white")
-		line.Material = Enum.Material.SmoothPlastic
-		line.Parent = arenaFolder
+local function resolveLevel(levelKey)
+	if EnemyTypes.Levels[levelKey] then
+		return levelKey
 	end
+	return EnemyTypes.DefaultLevel
+end
 
-	-- Walls
-	local wallHeight = 12
-	local wallThickness = 3
-
-	-- Back wall
-	local backWall = Instance.new("Part")
-	backWall.Name = "BackWall"
-	backWall.Size = Vector3.new(ARENA_WIDTH + 20, wallHeight, wallThickness)
-	backWall.Position = Vector3.new(0, wallHeight/2, -ARENA_DEPTH/2 - wallThickness/2)
-	backWall.Anchored = true
-	backWall.BrickColor = BrickColor.new("Dark taupe")
-	backWall.Material = Enum.Material.Brick
-	backWall.Parent = arenaFolder
-
-	-- Front wall
-	local frontWall = Instance.new("Part")
-	frontWall.Name = "FrontWall"
-	frontWall.Size = Vector3.new(ARENA_WIDTH + 20, wallHeight, wallThickness)
-	frontWall.Position = Vector3.new(0, wallHeight/2, ARENA_DEPTH/2 + wallThickness/2)
-	frontWall.Anchored = true
-	frontWall.BrickColor = BrickColor.new("Dark taupe")
-	frontWall.Material = Enum.Material.Brick
-	frontWall.Parent = arenaFolder
-
-	-- Left wall
-	local leftWall = Instance.new("Part")
-	leftWall.Name = "LeftWall"
-	leftWall.Size = Vector3.new(wallThickness, wallHeight, ARENA_DEPTH + 20)
-	leftWall.Position = Vector3.new(-ARENA_WIDTH/2 - wallThickness/2, wallHeight/2, 0)
-	leftWall.Anchored = true
-	leftWall.BrickColor = BrickColor.new("Reddish brown")
-	leftWall.Material = Enum.Material.Brick
-	leftWall.Parent = arenaFolder
-
-	-- Right wall
-	local rightWall = Instance.new("Part")
-	rightWall.Name = "RightWall"
-	rightWall.Size = Vector3.new(wallThickness, wallHeight, ARENA_DEPTH + 20)
-	rightWall.Position = Vector3.new(ARENA_WIDTH/2 + wallThickness/2, wallHeight/2, 0)
-	rightWall.Anchored = true
-	rightWall.BrickColor = BrickColor.new("Reddish brown")
-	rightWall.Material = Enum.Material.Brick
-	rightWall.Parent = arenaFolder
-
-	-- Props: dumpsters, barrels, crates
-	local props = {
-		{Name="Dumpster", Size=Vector3.new(4, 3, 3), Pos=Vector3.new(-25, 1.5, -18), Color="Earth green", Mat=Enum.Material.Metal},
-		{Name="Dumpster2", Size=Vector3.new(4, 3, 3), Pos=Vector3.new(30, 1.5, 20), Color="Earth green", Mat=Enum.Material.Metal},
-		{Name="Barrel1", Size=Vector3.new(2, 3, 2), Pos=Vector3.new(-15, 1.5, -20), Color="Brown", Mat=Enum.Material.Wood},
-		{Name="Barrel2", Size=Vector3.new(2, 3, 2), Pos=Vector3.new(-13, 1.5, -20), Color="Brown", Mat=Enum.Material.Wood},
-		{Name="Barrel3", Size=Vector3.new(2, 3, 2), Pos=Vector3.new(20, 1.5, 18), Color="Brown", Mat=Enum.Material.Wood},
-		{Name="Crate1", Size=Vector3.new(3, 3, 3), Pos=Vector3.new(10, 1.5, -22), Color="Brick yellow", Mat=Enum.Material.Wood},
-		{Name="Crate2", Size=Vector3.new(3, 3, 3), Pos=Vector3.new(13, 1.5, -22), Color="Brick yellow", Mat=Enum.Material.Wood},
-		{Name="Crate3", Size=Vector3.new(3, 4.5, 3), Pos=Vector3.new(11.5, 3, -22), Color="Brick yellow", Mat=Enum.Material.Wood},
-		-- Street lamp posts
-		{Name="LampPost1", Size=Vector3.new(0.5, 10, 0.5), Pos=Vector3.new(-20, 5, 0), Color="Medium stone grey", Mat=Enum.Material.Metal},
-		{Name="LampPost2", Size=Vector3.new(0.5, 10, 0.5), Pos=Vector3.new(20, 5, 0), Color="Medium stone grey", Mat=Enum.Material.Metal},
-		-- Bench
-		{Name="Bench", Size=Vector3.new(5, 1, 1.5), Pos=Vector3.new(0, 0.5, 22), Color="Reddish brown", Mat=Enum.Material.Wood},
-	}
-
-	for _, p in ipairs(props) do
-		local part = Instance.new("Part")
-		part.Name = p.Name
-		part.Size = p.Size
-		part.Position = p.Pos
-		part.Anchored = true
-		part.BrickColor = BrickColor.new(p.Color)
-		part.Material = p.Mat
-		part.Parent = arenaFolder
+local function resolveDifficulty(difficultyKey)
+	if DIFFICULTY_SETTINGS[difficultyKey] then
+		return difficultyKey
 	end
-
-	-- Lamp lights (PointLights)
-	for _, lampName in ipairs({"LampPost1", "LampPost2"}) do
-		local lamp = arenaFolder:FindFirstChild(lampName)
-		if lamp then
-			local light = Instance.new("PointLight")
-			light.Color = Color3.fromRGB(255, 200, 100)
-			light.Brightness = 2
-			light.Range = 30
-			light.Parent = lamp
-
-			local head = Instance.new("Part")
-			head.Name = lampName .. "Head"
-			head.Size = Vector3.new(1.5, 0.5, 1.5)
-			head.Position = lamp.Position + Vector3.new(0, 5.25, 0)
-			head.Anchored = true
-			head.BrickColor = BrickColor.new("Institutional white")
-			head.Material = Enum.Material.Neon
-			head.Parent = arenaFolder
-		end
-	end
-
-	-- Spawn platform (invisible, just for positioning)
-	local spawnLocation = Instance.new("SpawnLocation")
-	spawnLocation.Name = "SpawnLocation"
-	spawnLocation.Size = Vector3.new(8, 1, 8)
-	spawnLocation.Position = Vector3.new(0, 0.5, 10)
-	spawnLocation.Anchored = true
-	spawnLocation.Transparency = 1
-	spawnLocation.CanCollide = false
-	spawnLocation.Parent = arenaFolder
+	return DEFAULT_DIFFICULTY
 end
 
 ------------------------------------------------------------
 -- ENEMY SPAWNING & AI
 ------------------------------------------------------------
 local function getRandomSpawnPos()
-	local sp = SPAWN_POINTS[math.random(1, #SPAWN_POINTS)]
-	-- Add slight randomness so enemies don't stack
-	local jitter = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
-	return sp.pos + jitter
+	return ArenaBuilder.GetRandomSpawnPos(currentSelectedLevel)
+end
+
+local function getRandomGroundItemPos()
+	local margin = 6
+	local x = math.random(math.floor(-ARENA_WIDTH / 2 + margin), math.floor(ARENA_WIDTH / 2 - margin))
+	local z = math.random(math.floor(-ARENA_DEPTH / 2 + margin), math.floor(ARENA_DEPTH / 2 - margin))
+	return Vector3.new(x, 2, z)
+end
+
+local function createGroundItem(itemType)
+	local item = Instance.new("Part")
+	item.Name = itemType .. "Item"
+	item.Anchored = true
+	item.CanCollide = true
+	item.Position = getRandomGroundItemPos()
+	item:SetAttribute("ItemType", itemType)
+	item:SetAttribute("IsGroundItem", true)
+
+	if itemType == "Health" then
+		item.Size = Vector3.new(2, 2, 2)
+		item.Shape = Enum.PartType.Ball
+		item.BrickColor = BrickColor.new("Lime green")
+		item.Material = Enum.Material.Neon
+	elseif itemType == "Weapon" then
+		item.Size = Vector3.new(1, 3, 1)
+		item.BrickColor = BrickColor.new("Really black")
+		item.Material = Enum.Material.Metal
+	else
+		item.Size = Vector3.new(2.5, 2.5, 2.5)
+		item.Shape = Enum.PartType.Ball
+		item.BrickColor = BrickColor.new("Dark stone grey")
+		item.Material = Enum.Material.Slate
+	end
+
+	local label = Instance.new("BillboardGui")
+	label.Name = "ItemLabel"
+	label.Size = UDim2.new(0, 100, 0, 24)
+	label.StudsOffset = Vector3.new(0, 2.5, 0)
+	label.AlwaysOnTop = true
+	label.Parent = item
+
+	local text = Instance.new("TextLabel")
+	text.Size = UDim2.new(1, 0, 1, 0)
+	text.BackgroundTransparency = 1
+	text.Text = itemType:upper()
+	text.TextColor3 = Color3.new(1, 1, 1)
+	text.TextStrokeTransparency = 0.5
+	text.Font = Enum.Font.GothamBold
+	text.TextScaled = true
+	text.Parent = label
+
+	item.Parent = groundItemsFolder
+	return item
+end
+
+local function pickRandomItemType()
+	local roll = math.random()
+	if roll < 0.35 then
+		return "Health"
+	elseif roll < 0.65 then
+		return "Weapon"
+	end
+	return "Rock"
+end
+
+local function spawnGroundItem()
+	if gameState ~= "Playing" then return end
+	if #groundItemsFolder:GetChildren() >= CombatConfig.Items.MaxGroundItems then return end
+	createGroundItem(pickRandomItemType())
+end
+
+local function runGroundItemSpawner()
+	if itemSpawnerRunning then return end
+	itemSpawnerRunning = true
+	while gameState == "Playing" do
+		local delaySeconds = math.random(CombatConfig.Items.SpawnIntervalMin, CombatConfig.Items.SpawnIntervalMax)
+		task.wait(delaySeconds)
+		if gameState ~= "Playing" then
+			break
+		end
+		spawnGroundItem()
+	end
+	itemSpawnerRunning = false
+end
+
+local function findNearestGroundItem(position, maxDistance)
+	local nearest = nil
+	local nearestDist = maxDistance
+	for _, item in ipairs(groundItemsFolder:GetChildren()) do
+		if item:IsA("BasePart") and item:GetAttribute("IsGroundItem") then
+			local dist = (item.Position - position).Magnitude
+			if dist <= nearestDist then
+				nearest = item
+				nearestDist = dist
+			end
+		end
+	end
+	return nearest
+end
+
+local function clearHeldItem(player)
+	local held = heldItems[player.UserId]
+	if held and held.Part and held.Part.Parent then
+		held.Part:Destroy()
+	end
+	heldItems[player.UserId] = nil
+	itemUseCooldowns[player.UserId] = nil
+	HeldItemStateEvent:FireClient(player, nil)
+end
+
+local function updateEnemyHealthBar(enemy, enemyHumanoid)
+	local hb = enemy:FindFirstChild("HealthBar")
+	if hb then
+		local bg = hb:FindFirstChild("Background")
+		if bg then
+			local fill = bg:FindFirstChild("Fill")
+			if fill then
+				fill.Size = UDim2.new(math.max(0, enemyHumanoid.Health / enemyHumanoid.MaxHealth), 0, 1, 0)
+			end
+		end
+	end
+end
+
+local function applyEnemyKnockback(enemy, velocity, yForce, duration)
+	if not enemy.PrimaryPart then return end
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.Velocity = Vector3.new(velocity.X, yForce or 0, velocity.Z)
+	bv.Parent = enemy.PrimaryPart
+	Debris:AddItem(bv, duration or 0.2)
+end
+
+local function tryMeleeItemSwing(player, damage, range, knockbackForce)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
+	local charPos = player.Character.HumanoidRootPart.Position
+	local facing = player.Character.HumanoidRootPart.CFrame.LookVector
+	local hitSomething = false
+
+	for _, enemy in ipairs(Utils.GetEnemiesInRange(charPos, range, enemiesFolder)) do
+		local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+		if enemyHumanoid and enemyHumanoid.Health > 0 and enemy.PrimaryPart then
+			local toEnemy = (enemy.PrimaryPart.Position - charPos).Unit
+			if toEnemy:Dot(facing) > 0.1 then
+				enemyHumanoid:TakeDamage(damage)
+				updateEnemyHealthBar(enemy, enemyHumanoid)
+				applyEnemyKnockback(enemy, toEnemy * knockbackForce, 8, 0.2)
+				EnemyHitEvent:FireAllClients(enemy, "hit", charPos, "ItemSwing")
+				ComicBubbleEvent:FireAllClients(enemy, "heavy", enemy.PrimaryPart.Position)
+				hitSomething = true
+			end
+		end
+	end
+
+	return hitSomething
+end
+
+local function throwRock(player, rockPart, throwDirection)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		if rockPart and rockPart.Parent then
+			rockPart:Destroy()
+		end
+		return
+	end
+
+	local hrp = player.Character.HumanoidRootPart
+	local dir = (throwDirection and throwDirection.Magnitude > 0) and throwDirection.Unit or hrp.CFrame.LookVector
+	local lifetime = CombatConfig.Items.Rock.ProjectileLifetime
+	local hitDone = false
+	local touchConnection = nil
+
+	for _, child in ipairs(rockPart:GetChildren()) do
+		if child:IsA("WeldConstraint") then
+			child:Destroy()
+		end
+	end
+
+	rockPart.Anchored = false
+	rockPart.CanCollide = true
+	rockPart.Massless = false
+	rockPart.CFrame = CFrame.new(hrp.Position + dir * 2 + Vector3.new(0, 1.5, 0))
+	rockPart.Parent = workspace
+
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.Velocity = dir * CombatConfig.Items.Rock.ThrowSpeed + Vector3.new(0, 12, 0)
+	bv.Parent = rockPart
+	Debris:AddItem(bv, 0.25)
+
+	touchConnection = rockPart.Touched:Connect(function(hit)
+		if hitDone then return end
+		if player.Character and hit:IsDescendantOf(player.Character) then return end
+		local enemy = hit:FindFirstAncestorOfClass("Model")
+		if not enemy or enemy.Parent ~= enemiesFolder then return end
+		local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+		if not enemyHumanoid or enemyHumanoid.Health <= 0 then return end
+
+		hitDone = true
+		enemyHumanoid:TakeDamage(CombatConfig.Items.Rock.ThrowDamage)
+		updateEnemyHealthBar(enemy, enemyHumanoid)
+		totalScore = totalScore + CombatConfig.ScorePerHit
+		ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
+		if enemy.PrimaryPart then
+			local toEnemy = (enemy.PrimaryPart.Position - rockPart.Position).Unit
+			applyEnemyKnockback(enemy, toEnemy * 35, 10, 0.25)
+			ComicBubbleEvent:FireAllClients(enemy, "heavy", enemy.PrimaryPart.Position)
+		end
+		EnemyHitEvent:FireAllClients(enemy, "hit", rockPart.Position, "RockThrow")
+		if touchConnection then
+			touchConnection:Disconnect()
+		end
+		rockPart:Destroy()
+	end)
+
+	task.delay(lifetime, function()
+		if touchConnection then
+			touchConnection:Disconnect()
+		end
+	end)
+	Debris:AddItem(rockPart, lifetime)
 end
 
 local function findNearestPlayer(position)
@@ -243,20 +346,22 @@ local function spawnEnemy(typeName, waveNum)
 	if not enemyDef then return end
 
 	local healthMult = EnemyTypes.GetHealthMultiplier(waveNum)
+	local difficulty = currentDifficultySettings or DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY]
 	local spawnPos = getRandomSpawnPos()
 
 	local model = Utils.CreateNPCModel(
 		enemyDef.Name,
 		spawnPos,
 		enemyDef.Color,
-		enemyDef.ScaleMultiplier
+		enemyDef.ScaleMultiplier,
+		typeName
 	)
 
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local maxHP = math.floor(enemyDef.Health * healthMult)
+	local maxHP = math.max(1, math.floor(enemyDef.Health * healthMult * difficulty.HealthMultiplier))
 	humanoid.MaxHealth = maxHP
 	humanoid.Health = maxHP
-	humanoid.WalkSpeed = enemyDef.WalkSpeed
+	humanoid.WalkSpeed = enemyDef.WalkSpeed * difficulty.SpeedMultiplier
 	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer
 	humanoid.HealthDisplayDistance = 100
 
@@ -274,6 +379,11 @@ local function spawnEnemy(typeName, waveNum)
 	scoreVal.Name = "ScoreValue"
 	scoreVal.Value = enemyDef.ScoreValue
 	scoreVal.Parent = enemyData
+
+	local damageMultVal = Instance.new("NumberValue")
+	damageMultVal.Name = "DamageMultiplier"
+	damageMultVal.Value = difficulty.DamageMultiplier
+	damageMultVal.Parent = enemyData
 
 	local lastAttack = Instance.new("NumberValue")
 	lastAttack.Name = "LastAttack"
@@ -400,7 +510,9 @@ local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 
 	-- Calculate damage with combo multiplier
 	local dmgMult = enemyDef.ComboDamageMultipliers and enemyDef.ComboDamageMultipliers[hitIndex] or 1.0
-	local dmg = math.floor(enemyDef.Damage * dmgMult)
+	local damageMultVal = data:FindFirstChild("DamageMultiplier")
+	local difficultyDamageMult = damageMultVal and damageMultVal.Value or 1.0
+	local dmg = math.floor(enemyDef.Damage * dmgMult * difficultyDamageMult)
 	if isBlocking then
 		dmg = math.floor(dmg * (1 - CombatConfig.BlockDamageReduction))
 	end
@@ -542,7 +654,7 @@ function startNextWave()
 
 	task.wait(3)
 
-	local waveDef = EnemyTypes.GetWave(currentWave)
+	local waveDef = EnemyTypes.GetWave(currentWave, currentSelectedLevel)
 	for _, group in ipairs(waveDef) do
 		for i = 1, group.Count do
 			spawnEnemy(group.Type, currentWave)
@@ -558,6 +670,11 @@ local function cleanupGame()
 	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 		enemy:Destroy()
 	end
+	groundItemsFolder:ClearAllChildren()
+	for _, player in ipairs(Players:GetPlayers()) do
+		clearHeldItem(player)
+	end
+	itemSpawnerRunning = false
 	enemiesAlive = 0
 	currentWave = 0
 	totalScore = 0
@@ -577,17 +694,37 @@ local function checkAllPlayersDead()
 	return true
 end
 
-local function startGame()
+local function startGame(levelKey, difficultyKey)
 	if gameState == "Playing" then return end
 
-	cleanupGame()
-	gameState = "Playing"
-	GameStateEvent:FireAllClients("GameStart", 0)
+	currentSelectedLevel = resolveLevel(levelKey or currentSelectedLevel)
+	currentSelectedDifficulty = resolveDifficulty(difficultyKey or currentSelectedDifficulty)
+	currentDifficultySettings = DIFFICULTY_SETTINGS[currentSelectedDifficulty]
 
-	-- Respawn all players
-	for _, player in ipairs(Players:GetPlayers()) do
+	cleanupGame()
+
+	-- Build the arena for the selected level
+	ArenaBuilder.Build(arenaFolder, currentSelectedLevel)
+
+	gameState = "Playing"
+	GameStateEvent:FireAllClients("GameStart", {
+		level = currentSelectedLevel,
+		levelName = EnemyTypes.GetLevel(currentSelectedLevel).DisplayName,
+		difficulty = currentSelectedDifficulty,
+	})
+
+	-- Respawn all players at level-specific spawn
+	local baseSpawnPos = ArenaBuilder.GetPlayerSpawn(currentSelectedLevel)
+	for index, player in ipairs(Players:GetPlayers()) do
 		player:LoadCharacter()
 		playerDeaths[player.UserId] = false
+		local character = player.Character or player.CharacterAdded:Wait()
+		local hrp = character:WaitForChild("HumanoidRootPart", 5)
+		if hrp then
+			local slotOffset = Vector3.new((index - 1) * 3, 0, 0)
+			local spawnPos = baseSpawnPos + slotOffset
+			hrp.CFrame = CFrame.new(spawnPos, spawnPos + Vector3.new(0, 0, -1))
+		end
 	end
 
 	task.wait(2)
@@ -595,6 +732,8 @@ local function startGame()
 
 	-- Start AI loop in separate thread
 	task.spawn(runEnemyAI)
+	task.spawn(runGroundItemSpawner)
+	spawnGroundItem()
 end
 
 local function endGame()
@@ -604,6 +743,11 @@ local function endGame()
 	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
 		enemy:Destroy()
 	end
+	groundItemsFolder:ClearAllChildren()
+	for _, player in ipairs(Players:GetPlayers()) do
+		clearHeldItem(player)
+	end
+	itemSpawnerRunning = false
 	enemiesAlive = 0
 end
 
@@ -613,6 +757,7 @@ end
 AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, attackDirection)
 	if gameState ~= "Playing" then return end
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+	if heldItems[player.UserId] then return end
 
 	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
@@ -659,7 +804,7 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 					bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 					bv.Velocity = Vector3.new(actualKnock.X, yForce, actualKnock.Z)
 					bv.Parent = enemy.PrimaryPart
-					game:GetService("Debris"):AddItem(bv, 0.25)
+					Debris:AddItem(bv, 0.25)
 				end
 
 				-- Fire comic bubble event to all clients
@@ -674,16 +819,7 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 				EnemyHitEvent:FireAllClients(enemy, "hit", charPos, attackType)
 
 				-- Update health bar
-				local hb = enemy:FindFirstChild("HealthBar")
-				if hb then
-					local bg = hb:FindFirstChild("Background")
-					if bg then
-						local fill = bg:FindFirstChild("Fill")
-						if fill then
-							fill.Size = UDim2.new(math.max(0, enemyHumanoid.Health / enemyHumanoid.MaxHealth), 0, 1, 0)
-						end
-					end
-				end
+				updateEnemyHealthBar(enemy, enemyHumanoid)
 			end
 		end
 	end
@@ -694,11 +830,90 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 	end
 end)
 
+ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
+	if gameState ~= "Playing" then return end
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	if action == "Pickup" then
+		if heldItems[player.UserId] then return end
+		local nearestItem = findNearestGroundItem(player.Character.HumanoidRootPart.Position, CombatConfig.Items.PickupRange)
+		if not nearestItem then return end
+
+		local itemType = nearestItem:GetAttribute("ItemType")
+		if itemType == "Health" then
+			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + CombatConfig.Items.Health.HealAmount)
+			nearestItem:Destroy()
+			HeldItemStateEvent:FireClient(player, nil)
+			return
+		end
+
+		local attachPart = player.Character:FindFirstChild("RightHand")
+			or player.Character:FindFirstChild("Right Arm")
+			or player.Character:FindFirstChild("HumanoidRootPart")
+		if not attachPart then return end
+
+		nearestItem.Anchored = false
+		nearestItem.CanCollide = false
+		nearestItem.Massless = true
+		nearestItem.CFrame = attachPart.CFrame * CFrame.new(0, -0.8, -1)
+		nearestItem.Parent = player.Character
+
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = attachPart
+		weld.Part1 = nearestItem
+		weld.Parent = nearestItem
+
+		heldItems[player.UserId] = {
+			Type = itemType,
+			Part = nearestItem,
+		}
+		HeldItemStateEvent:FireClient(player, itemType)
+	elseif action == "Use" then
+		local held = heldItems[player.UserId]
+		if not held or not held.Part or not held.Part.Parent then
+			clearHeldItem(player)
+			return
+		end
+
+		local now = tick()
+		local lastUsed = itemUseCooldowns[player.UserId] or 0
+		local useCooldown = CombatConfig.Items.Weapon.SwingCooldown
+		if held.Type == "Rock" then
+			useCooldown = CombatConfig.Items.Rock.ThrowCooldown
+		end
+		if now - lastUsed < useCooldown then
+			return
+		end
+		itemUseCooldowns[player.UserId] = now
+
+		if held.Type == "Weapon" then
+			local didHit = tryMeleeItemSwing(
+				player,
+				CombatConfig.Items.Weapon.SwingDamage,
+				CombatConfig.Items.Weapon.SwingRange,
+				28
+			)
+			if didHit then
+				totalScore = totalScore + CombatConfig.ScorePerHit
+				ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
+			end
+		elseif held.Type == "Rock" then
+			heldItems[player.UserId] = nil
+			HeldItemStateEvent:FireClient(player, nil)
+			throwRock(player, held.Part, direction)
+		end
+	end
+end)
+
 ------------------------------------------------------------
 -- PLAYER DEATH TRACKING
 ------------------------------------------------------------
 Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
+		clearHeldItem(player)
+
 		local blockVal = Instance.new("BoolValue")
 		blockVal.Name = "IsBlocking"
 		blockVal.Value = false
@@ -711,6 +926,7 @@ Players.PlayerAdded:Connect(function(player)
 
 		local humanoid = character:WaitForChild("Humanoid")
 		humanoid.Died:Connect(function()
+			clearHeldItem(player)
 			playerDeaths[player.UserId] = true
 			PlayerDiedEvent:FireClient(player)
 
@@ -720,24 +936,28 @@ Players.PlayerAdded:Connect(function(player)
 			end
 		end)
 	end)
+end)
 
+Players.PlayerRemoving:Connect(function(player)
+	clearHeldItem(player)
+	heldItems[player.UserId] = nil
+	itemUseCooldowns[player.UserId] = nil
+end)
+
+RequestGameStartEvent.OnServerEvent:Connect(function(player, levelKey, difficultyKey)
 	if gameState == "Lobby" then
-		task.wait(5)
-		if gameState == "Lobby" and #Players:GetPlayers() > 0 then
-			startGame()
-		end
+		startGame(levelKey, difficultyKey)
 	end
 end)
 
 -- Handle restart request
 RequestRestartEvent.OnServerEvent:Connect(function(player)
 	if gameState == "GameOver" then
-		startGame()
+		startGame(currentSelectedLevel, currentSelectedDifficulty)
 	end
 end)
 
 -- Handle block state from client
-local BlockEvent = createRemote("RemoteEvent", "BlockEvent")
 BlockEvent.OnServerEvent:Connect(function(player, isBlocking)
 	if player.Character then
 		local bv = player.Character:FindFirstChild("IsBlocking")
@@ -748,7 +968,6 @@ BlockEvent.OnServerEvent:Connect(function(player, isBlocking)
 end)
 
 -- Handle dodge from client
-local DodgeEvent = createRemote("RemoteEvent", "DodgeEvent")
 DodgeEvent.OnServerEvent:Connect(function(player, direction)
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
 	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
@@ -768,7 +987,7 @@ DodgeEvent.OnServerEvent:Connect(function(player, direction)
 	bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
 	bv.Velocity = direction * CombatConfig.DodgeDistance
 	bv.Parent = player.Character.HumanoidRootPart
-	game:GetService("Debris"):AddItem(bv, 0.3)
+	Debris:AddItem(bv, 0.3)
 end)
 
 ------------------------------------------------------------
@@ -940,12 +1159,5 @@ local origRunEnemyAI = runEnemyAI
 ------------------------------------------------------------
 -- INIT
 ------------------------------------------------------------
-buildArena()
+ArenaBuilder.Build(arenaFolder, currentSelectedLevel)
 print("[BrawlAlley] Arena built. Waiting for players...")
-
-if #Players:GetPlayers() > 0 then
-	task.wait(3)
-	if gameState == "Lobby" then
-		startGame()
-	end
-end

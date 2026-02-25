@@ -49,4 +49,27 @@ CombatConfig.ScorePerKill = 100
 CombatConfig.ScorePerHit = 10
 CombatConfig.ComboScoreBonus = 50 -- per combo level
 
+-- Ground item system
+CombatConfig.Items = {
+	PickupRange = 8,
+	SpawnIntervalMin = 8,
+	SpawnIntervalMax = 16,
+	MaxGroundItems = 6,
+	ItemUseInputCooldown = 0.25,
+	Health = {
+		HealAmount = 35,
+	},
+	Weapon = {
+		SwingDamage = 30,
+		SwingRange = 7,
+		SwingCooldown = 0.7,
+	},
+	Rock = {
+		ThrowDamage = 22,
+		ThrowSpeed = 90,
+		ThrowCooldown = 0.6,
+		ProjectileLifetime = 5,
+	},
+}
+
 return CombatConfig
