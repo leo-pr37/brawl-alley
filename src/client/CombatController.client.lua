@@ -191,6 +191,31 @@ local function tryPickupItem()
 	ItemInteractEvent:FireServer("Pickup")
 end
 
+local function tryDropHeldItem()
+	if not heldItemType or not isAlive() then return end
+	ItemInteractEvent:FireServer("Drop", getLookDirection())
+end
+
+local function tryThrowHeldItem()
+	if not heldItemType or not isAlive() or isBlocking then
+		return false
+	end
+
+	local now = tick()
+	if now - lastItemUseTime < CombatConfig.Items.ItemUseInputCooldown then
+		return true
+	end
+	lastItemUseTime = now
+
+	ItemInteractEvent:FireServer("Throw", getLookDirection())
+
+	local char = getCharacter()
+	if char and AnimationManager.HasJoints(char) then
+		AnimationManager.PlayHeavyPunch(char)
+	end
+	return true
+end
+
 -- Dodge
 local function doDodge()
 	if not isAlive() then return end
@@ -271,6 +296,14 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 	if input.KeyCode == Enum.KeyCode.E then
 		tryPickupItem()
+	end
+
+	if input.KeyCode == Enum.KeyCode.R then
+		tryDropHeldItem()
+	end
+
+	if input.KeyCode == Enum.KeyCode.F then
+		tryThrowHeldItem()
 	end
 end)
 

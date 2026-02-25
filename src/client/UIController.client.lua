@@ -231,11 +231,13 @@ controlsLabel.Text = [[CONTROLS:
 WASD - Move
 Left Click - Light Attack
 Hold Left Click - Heavy Attack
-Left Click (holding item) - Swing/Throw Item
+Left Click (holding item) - Use Item
 Right Click - Block
 Shift / Q - Dodge
 E - Pick Up Item
- 
+F - Throw Held Item
+R - Drop Held Item
+  
 Select your level and difficulty, then start!]]
 controlsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 controlsLabel.Font = Enum.Font.Gotham

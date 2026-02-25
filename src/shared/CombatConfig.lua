@@ -63,6 +63,11 @@ CombatConfig.Items = {
 		SwingDamage = 30,
 		SwingRange = 7,
 		SwingCooldown = 0.7,
+		ThrowDamage = 18,
+		ThrowSpeed = 75,
+		ThrowCooldown = 0.9,
+		ProjectileLifetime = 4,
+		KnockbackForce = 28,
 	},
 	Rock = {
 		ThrowDamage = 22,

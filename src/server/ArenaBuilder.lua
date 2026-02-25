@@ -202,8 +202,8 @@ end
 ------------------------------------------------------------
 -- SPAWN POINTS PER LEVEL
 ------------------------------------------------------------
-local ARENA_WIDTH = 80
-local ARENA_DEPTH = 50
+local ARENA_WIDTH = 120
+local ARENA_DEPTH = 80
 
 ArenaBuilder.SpawnPoints = {
 	Alley = {
@@ -262,7 +262,7 @@ end
 function ArenaBuilder.GetRandomSpawnPos(levelKey)
 	local points = ArenaBuilder.SpawnPoints[levelKey] or ArenaBuilder.SpawnPoints.Alley
 	local sp = points[math.random(1, #points)]
-	local jitter = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
+	local jitter = Vector3.new(math.random(-6, 6), 0, math.random(-6, 6))
 	return sp.pos + jitter
 end
 

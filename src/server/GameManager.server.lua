@@ -79,8 +79,8 @@ groundItemsFolder.Name = "GroundItems"
 groundItemsFolder.Parent = workspace
 
 -- Arena dimensions
-local ARENA_WIDTH = 80
-local ARENA_DEPTH = 50
+local ARENA_WIDTH = 120
+local ARENA_DEPTH = 80
 local ARENA_CENTER = Vector3.new(0, 0, 0)
 
 local function resolveLevel(levelKey)
@@ -212,6 +212,43 @@ local function clearHeldItem(player)
 	HeldItemStateEvent:FireClient(player, nil)
 end
 
+local function dropHeldItem(player, dropDirection)
+	local held = heldItems[player.UserId]
+	if not held or not held.Part or not held.Part.Parent then
+		heldItems[player.UserId] = nil
+		HeldItemStateEvent:FireClient(player, nil)
+		return
+	end
+
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		held.Part:Destroy()
+		heldItems[player.UserId] = nil
+		HeldItemStateEvent:FireClient(player, nil)
+		return
+	end
+
+	local hrp = player.Character.HumanoidRootPart
+	local dir = (dropDirection and dropDirection.Magnitude > 0) and dropDirection.Unit or hrp.CFrame.LookVector
+
+	for _, child in ipairs(held.Part:GetChildren()) do
+		if child:IsA("WeldConstraint") then
+			child:Destroy()
+		end
+	end
+
+	held.Part.Anchored = true
+	held.Part.CanCollide = true
+	held.Part.Massless = false
+	held.Part.Position = hrp.Position + dir * 3 + Vector3.new(0, 1, 0)
+	held.Part.Parent = groundItemsFolder
+	held.Part:SetAttribute("ItemType", held.Type)
+	held.Part:SetAttribute("IsGroundItem", true)
+
+	heldItems[player.UserId] = nil
+	itemUseCooldowns[player.UserId] = nil
+	HeldItemStateEvent:FireClient(player, nil)
+end
+
 local function updateEnemyHealthBar(enemy, enemyHumanoid)
 	local hb = enemy:FindFirstChild("HealthBar")
 	if hb then
@@ -258,7 +295,7 @@ local function tryMeleeItemSwing(player, damage, range, knockbackForce)
 	return hitSomething
 end
 
-local function throwRock(player, rockPart, throwDirection)
+local function throwRock(player, rockPart, throwDirection, throwConfig, attackTag)
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
 		if rockPart and rockPart.Parent then
 			rockPart:Destroy()
@@ -266,9 +303,12 @@ local function throwRock(player, rockPart, throwDirection)
 		return
 	end
 
+	throwConfig = throwConfig or CombatConfig.Items.Rock
+	attackTag = attackTag or "RockThrow"
+
 	local hrp = player.Character.HumanoidRootPart
 	local dir = (throwDirection and throwDirection.Magnitude > 0) and throwDirection.Unit or hrp.CFrame.LookVector
-	local lifetime = CombatConfig.Items.Rock.ProjectileLifetime
+	local lifetime = throwConfig.ProjectileLifetime
 	local hitDone = false
 	local touchConnection = nil
 
@@ -286,7 +326,7 @@ local function throwRock(player, rockPart, throwDirection)
 
 	local bv = Instance.new("BodyVelocity")
 	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-	bv.Velocity = dir * CombatConfig.Items.Rock.ThrowSpeed + Vector3.new(0, 12, 0)
+	bv.Velocity = dir * throwConfig.ThrowSpeed + Vector3.new(0, 12, 0)
 	bv.Parent = rockPart
 	Debris:AddItem(bv, 0.25)
 
@@ -299,16 +339,16 @@ local function throwRock(player, rockPart, throwDirection)
 		if not enemyHumanoid or enemyHumanoid.Health <= 0 then return end
 
 		hitDone = true
-		enemyHumanoid:TakeDamage(CombatConfig.Items.Rock.ThrowDamage)
+		enemyHumanoid:TakeDamage(throwConfig.ThrowDamage)
 		updateEnemyHealthBar(enemy, enemyHumanoid)
 		totalScore = totalScore + CombatConfig.ScorePerHit
 		ScoreEvent:FireClient(player, "hit", CombatConfig.ScorePerHit, totalScore)
 		if enemy.PrimaryPart then
 			local toEnemy = (enemy.PrimaryPart.Position - rockPart.Position).Unit
-			applyEnemyKnockback(enemy, toEnemy * 35, 10, 0.25)
+			applyEnemyKnockback(enemy, toEnemy * (throwConfig.KnockbackForce or 35), 10, 0.25)
 			ComicBubbleEvent:FireAllClients(enemy, "heavy", enemy.PrimaryPart.Position)
 		end
-		EnemyHitEvent:FireAllClients(enemy, "hit", rockPart.Position, "RockThrow")
+		EnemyHitEvent:FireAllClients(enemy, "hit", rockPart.Position, attackTag)
 		if touchConnection then
 			touchConnection:Disconnect()
 		end
@@ -339,6 +379,21 @@ local function findNearestPlayer(position)
 		end
 	end
 	return nearest, nearestDist
+end
+
+local function countNearbyEnemies(position, radius, excludedEnemy)
+	local count = 0
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy ~= excludedEnemy and enemy:IsA("Model") and enemy.PrimaryPart then
+			local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				if (enemy.PrimaryPart.Position - position).Magnitude <= radius then
+					count = count + 1
+				end
+			end
+		end
+	end
+	return count
 end
 
 local function spawnEnemy(typeName, waveNum)
@@ -385,6 +440,11 @@ local function spawnEnemy(typeName, waveNum)
 	damageMultVal.Value = difficulty.DamageMultiplier
 	damageMultVal.Parent = enemyData
 
+	local baseWalkSpeedVal = Instance.new("NumberValue")
+	baseWalkSpeedVal.Name = "BaseWalkSpeed"
+	baseWalkSpeedVal.Value = humanoid.WalkSpeed
+	baseWalkSpeedVal.Parent = enemyData
+
 	local lastAttack = Instance.new("NumberValue")
 	lastAttack.Name = "LastAttack"
 	lastAttack.Value = 0
@@ -420,6 +480,11 @@ local function spawnEnemy(typeName, waveNum)
 	hasFirstTaunted.Name = "HasFirstTaunted"
 	hasFirstTaunted.Value = false
 	hasFirstTaunted.Parent = enemyData
+
+	local engageDistance = Instance.new("NumberValue")
+	engageDistance.Name = "EngageDistance"
+	engageDistance.Value = (enemyDef.AttackRange or 5) + math.random(3, 8)
+	engageDistance.Parent = enemyData
 
 	-- Health bar
 	Utils.CreateHealthBar(model, maxHP)
@@ -558,81 +623,98 @@ local function runEnemyAI()
 						if target then
 							local aiState = data:FindFirstChild("AIState")
 							local hasFirstTaunted = data:FindFirstChild("HasFirstTaunted")
+							local baseWalkSpeedVal = data:FindFirstChild("BaseWalkSpeed")
+							local engageDistanceVal = data:FindFirstChild("EngageDistance")
 							local now = tick()
+							local aggroRange = enemyDef.AggroRange or 28
+							local attackRange = enemyDef.AttackRange or 4
+							local engageDistance = engageDistanceVal and engageDistanceVal.Value or (attackRange + 4)
+							local baseWalkSpeed = baseWalkSpeedVal and baseWalkSpeedVal.Value or humanoid.WalkSpeed
+							local approachWalkSpeed = math.max(6, baseWalkSpeed * 0.55)
 
-							-- APPROACHING STATE: walk toward player, do first taunt at medium range
+							-- Too far away: stay put until player is in aggro range.
+							if dist > aggroRange then
+								humanoid.WalkSpeed = baseWalkSpeed
+								humanoid:MoveTo(enemy.PrimaryPart.Position)
+								if aiState then aiState.Value = "approaching" end
+								continue
+							end
+
+							-- APPROACHING STATE: slow approach with spacing, taunt mid-range.
 							if aiState and aiState.Value == "approaching" then
-								-- First taunt when at medium range (15-25 studs)
-								if hasFirstTaunted and not hasFirstTaunted.Value and dist <= 25 and dist >= 8 then
+								if hasFirstTaunted and not hasFirstTaunted.Value and dist <= math.min(25, aggroRange) and dist >= 10 then
 									hasFirstTaunted.Value = true
 									doEnemyTaunt(enemy, enemyDef, data)
 									continue
 								end
 
-								-- If close enough, switch to fighting
-								if dist <= enemyDef.AttackRange + 2 then
-									if aiState then aiState.Value = "fighting" end
+								if dist <= engageDistance then
+									aiState.Value = "fighting"
 								else
-									-- Keep walking toward player
+									humanoid.WalkSpeed = approachWalkSpeed
 									humanoid:MoveTo(target.HumanoidRootPart.Position)
 									continue
 								end
 							end
 
-							-- FIGHTING STATE: normal combat AI with high taunt chance
-							if dist <= enemyDef.AggroRange then
-								-- Check for taunt opportunity (higher chance: 50-70%)
-								local lastTauntVal = data:FindFirstChild("LastTaunt")
-								local tauntCooldown = enemyDef.TauntCooldown or 8
-								-- Reduce cooldown for more frequent taunts (4-8 seconds)
-								local actualCooldown = math.max(4, tauntCooldown * 0.6)
-								if lastTauntVal and (now - lastTauntVal.Value) >= actualCooldown then
-									-- Much higher taunt chance
-									local tauntChance = math.max(0.5, (enemyDef.TauntChance or 0.3) * 2)
-									if math.random() < tauntChance then
-										doEnemyTaunt(enemy, enemyDef, data)
-										continue
-									end
+							-- FIGHTING STATE: limited crowding + staggered pressure.
+							local nearbyFighters = countNearbyEnemies(target.HumanoidRootPart.Position, attackRange + 3, enemy)
+							local maxActiveFighters = 2
+							if nearbyFighters >= maxActiveFighters and dist > attackRange then
+								humanoid.WalkSpeed = approachWalkSpeed
+								humanoid:MoveTo(enemy.PrimaryPart.Position)
+								continue
+							end
+
+							-- Check for taunt opportunity (higher chance: 50-70%)
+							local lastTauntVal = data:FindFirstChild("LastTaunt")
+							local tauntCooldown = enemyDef.TauntCooldown or 8
+							local actualCooldown = math.max(4, tauntCooldown * 0.6)
+							if lastTauntVal and (now - lastTauntVal.Value) >= actualCooldown then
+								local tauntChance = math.max(0.5, (enemyDef.TauntChance or 0.3) * 2)
+								if math.random() < tauntChance then
+									doEnemyTaunt(enemy, enemyDef, data)
+									continue
 								end
+							end
 
-								if dist <= enemyDef.AttackRange then
-									-- Attack with combo system
-									local lastAtk = data:FindFirstChild("LastAttack")
-									local comboStepVal = data:FindFirstChild("ComboStep")
-									local lastComboVal = data:FindFirstChild("LastComboTime")
+							if dist <= attackRange then
+								-- Attack with combo system
+								local lastAtk = data:FindFirstChild("LastAttack")
+								local comboStepVal = data:FindFirstChild("ComboStep")
+								local lastComboVal = data:FindFirstChild("LastComboTime")
 
-									if lastAtk and comboStepVal then
-										local comboHits = enemyDef.ComboHits or 1
-										local comboCooldown = enemyDef.ComboCooldown or 0.5
-										local currentStep = comboStepVal.Value
+								if lastAtk and comboStepVal then
+									local comboHits = enemyDef.ComboHits or 1
+									local comboCooldown = enemyDef.ComboCooldown or 0.5
+									local currentStep = comboStepVal.Value
 
-										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) < comboCooldown + 0.3 then
-											if (now - lastComboVal.Value) >= comboCooldown then
-												currentStep = currentStep + 1
-												if currentStep > comboHits then
-													comboStepVal.Value = 0
-													lastAtk.Value = now
-												else
-													comboStepVal.Value = currentStep
-													lastComboVal.Value = now
-													doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
-												end
-											end
-										elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
-											comboStepVal.Value = 1
-											if lastComboVal then lastComboVal.Value = now end
-											lastAtk.Value = now
-											doEnemyComboHit(enemy, enemyDef, data, target, 1)
-										else
-											if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
+									if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) < comboCooldown + 0.3 then
+										if (now - lastComboVal.Value) >= comboCooldown then
+											currentStep = currentStep + 1
+											if currentStep > comboHits then
 												comboStepVal.Value = 0
+												lastAtk.Value = now
+											else
+												comboStepVal.Value = currentStep
+												lastComboVal.Value = now
+												doEnemyComboHit(enemy, enemyDef, data, target, currentStep)
 											end
 										end
+									elseif currentStep == 0 and (now - lastAtk.Value) >= enemyDef.AttackCooldown then
+										comboStepVal.Value = 1
+										if lastComboVal then lastComboVal.Value = now end
+										lastAtk.Value = now
+										doEnemyComboHit(enemy, enemyDef, data, target, 1)
+									else
+										if currentStep > 0 and lastComboVal and (now - lastComboVal.Value) >= comboCooldown + 0.3 then
+											comboStepVal.Value = 0
+										end
 									end
-								else
-									-- Move toward target
-									humanoid:MoveTo(target.HumanoidRootPart.Position)
 								end
+							else
+								humanoid.WalkSpeed = approachWalkSpeed
+								humanoid:MoveTo(target.HumanoidRootPart.Position)
 							end
 						end
 					end
@@ -904,6 +986,33 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 			HeldItemStateEvent:FireClient(player, nil)
 			throwRock(player, held.Part, direction)
 		end
+	elseif action == "Drop" then
+		dropHeldItem(player, direction)
+	elseif action == "Throw" then
+		local held = heldItems[player.UserId]
+		if not held or not held.Part or not held.Part.Parent then
+			clearHeldItem(player)
+			return
+		end
+
+		local now = tick()
+		local lastUsed = itemUseCooldowns[player.UserId] or 0
+		local throwCooldown = CombatConfig.Items.Rock.ThrowCooldown
+		if held.Type == "Weapon" then
+			throwCooldown = CombatConfig.Items.Weapon.ThrowCooldown
+		end
+		if now - lastUsed < throwCooldown then
+			return
+		end
+		itemUseCooldowns[player.UserId] = now
+
+		heldItems[player.UserId] = nil
+		HeldItemStateEvent:FireClient(player, nil)
+		if held.Type == "Weapon" then
+			throwRock(player, held.Part, direction, CombatConfig.Items.Weapon, "WeaponThrow")
+		else
+			throwRock(player, held.Part, direction, CombatConfig.Items.Rock, "RockThrow")
+		end
 	end
 end)
 
@@ -1022,10 +1131,9 @@ DevFreezeEvent.OnServerEvent:Connect(function(player)
 					end
 				else
 					local data = enemy:FindFirstChild("EnemyData")
-					local typeName = data and data:FindFirstChild("Type") and data.Type.Value or "Thug"
-					local enemyDef = EnemyTypes.Types[typeName]
-					if enemyDef then
-						humanoid.WalkSpeed = enemyDef.WalkSpeed
+					local baseWalkSpeed = data and data:FindFirstChild("BaseWalkSpeed")
+					if baseWalkSpeed then
+						humanoid.WalkSpeed = baseWalkSpeed.Value
 					end
 					if data then
 						local t = data:FindFirstChild("IsTaunting")
