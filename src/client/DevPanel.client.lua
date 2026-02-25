@@ -39,6 +39,22 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.DisplayOrder = 100
 screenGui.Parent = playerGui
 
+-- Full-screen backdrop (captures mouse so it can move freely)
+local backdrop = Instance.new("TextButton")
+backdrop.Name = "DevBackdrop"
+backdrop.Size = UDim2.new(1, 0, 1, 0)
+backdrop.Position = UDim2.new(0, 0, 0, 0)
+backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+backdrop.BackgroundTransparency = 0.7
+backdrop.BorderSizePixel = 0
+backdrop.Text = ""
+backdrop.AutoButtonColor = false
+backdrop.Visible = false
+backdrop.ZIndex = 49
+backdrop.Parent = screenGui
+
+-- Click backdrop to close panel (connected after togglePanel is defined below)
+
 -- Main panel frame (right side)
 local panel = Instance.new("ScrollingFrame")
 panel.Name = "DevPanel"
@@ -347,6 +363,7 @@ end)
 local function togglePanel()
 	panelOpen = not panelOpen
 	panel.Visible = panelOpen
+	backdrop.Visible = panelOpen
 
 	if panelOpen then
 		-- Unlock mouse so buttons are clickable (flag stops camera from re-locking)
@@ -363,6 +380,13 @@ end
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 	if input.KeyCode == Enum.KeyCode.F9 or input.KeyCode == Enum.KeyCode.Grave then
+		togglePanel()
+	end
+end)
+
+-- Connect backdrop close (now that togglePanel is defined)
+backdrop.MouseButton1Click:Connect(function()
+	if panelOpen then
 		togglePanel()
 	end
 end)
