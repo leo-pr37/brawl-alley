@@ -83,7 +83,7 @@ CombatConfig.Audio = {
 		-- Optional: set these to free Creator Store audio IDs to enable background music.
 		-- Example format: "rbxassetid://1234567890"
 		LobbyTrackId = "rbxassetid://130156110441976",
-		BattleTrackId = "",
+		BattleTrackId = "rbxassetid://140345597354794",
 		Volume = 0.2,
 	},
 	SFX = {
