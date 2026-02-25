@@ -96,12 +96,13 @@ function CharacterBuilder.Build(name, position, color, scaleMultiplier)
 		part.Size = size
 		part.CFrame = baseCF + offset
 		part.Anchored = false
-		part.CanCollide = (partName == "HumanoidRootPart")
+		part.CanCollide = (partName == "LeftFoot" or partName == "RightFoot" or partName == "LeftLowerLeg" or partName == "RightLowerLeg")
 		part.Material = Enum.Material.SmoothPlastic
 		part.BrickColor = color or BrickColor.new("Medium stone grey")
 
 		if partName == "HumanoidRootPart" then
 			part.Transparency = 1
+			part.CanCollide = false
 		elseif partName == "Head" then
 			part.Shape = Enum.PartType.Ball
 			-- Face decal
@@ -133,6 +134,7 @@ function CharacterBuilder.Build(name, position, color, scaleMultiplier)
 	humanoid.MaxHealth = 100
 	humanoid.Health = 100
 	humanoid.WalkSpeed = 16
+	humanoid.HipHeight = 2 * s
 	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Subject
 	humanoid.HealthDisplayDistance = 50
 	humanoid.NameDisplayDistance = 50

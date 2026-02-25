@@ -35,6 +35,10 @@ local isHolding = false
 local attackCooldownEnd = 0
 local heldItemType = nil
 local lastItemUseTime = 0
+local isSprinting = false
+
+local BASE_WALK_SPEED = CombatConfig.PlayerWalkSpeed or 20
+local SPRINT_WALK_SPEED = BASE_WALK_SPEED * 1.5
 
 -- Get character safely
 local function getCharacter()
@@ -54,6 +58,13 @@ end
 local function isAlive()
 	local h = getHumanoid()
 	return h and h.Health > 0
+end
+
+local function setSprint(enabled)
+	isSprinting = enabled and true or false
+	local humanoid = getHumanoid()
+	if not humanoid or humanoid.Health <= 0 then return end
+	humanoid.WalkSpeed = isSprinting and SPRINT_WALK_SPEED or BASE_WALK_SPEED
 end
 
 local function getLookDirection()
@@ -298,6 +309,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		tryPickupItem()
 	end
 
+	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+		setSprint(true)
+	end
+
 	if input.KeyCode == Enum.KeyCode.R then
 		tryDropHeldItem()
 	end
@@ -328,6 +343,10 @@ UserInputService.InputEnded:Connect(function(input, processed)
 		if char and AnimationManager.HasJoints(char) then
 			AnimationManager.PlayUnblock(char)
 		end
+	end
+
+	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+		setSprint(false)
 	end
 end)
 
@@ -426,6 +445,14 @@ HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
 	if not itemType then
 		lastItemUseTime = 0
 	end
+end)
+
+player.CharacterAdded:Connect(function(character)
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if humanoid then
+		humanoid.WalkSpeed = BASE_WALK_SPEED
+	end
+	isSprinting = false
 end)
 
 -- Setup joints on character spawn

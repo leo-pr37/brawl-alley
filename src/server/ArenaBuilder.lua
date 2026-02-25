@@ -95,15 +95,15 @@ local function buildSubway(folder, W, D)
 	-- Platform floor – dark concrete
 	makePart(folder, "Ground", Vector3.new(W+20, 1, D+20), Vector3.new(0, -0.5, 0), "Really black", Enum.Material.Concrete)
 
-	-- Tiled platform strip
-	makePart(folder, "Platform", Vector3.new(W-10, 0.6, 10), Vector3.new(0, 0.1, -D/4), "Medium stone grey", Enum.Material.Marble)
+	-- Tiled platform strip (raised to avoid z-fighting shimmer)
+	makePart(folder, "Platform", Vector3.new(W-10, 0.6, 10), Vector3.new(0, 0.35, -D/4), "Medium stone grey", Enum.Material.Concrete)
 
 	-- Rail tracks (two parallel rails)
 	for _, z in ipairs({3, -3}) do
-		makePart(folder, "Rail", Vector3.new(W-4, 0.15, 0.3), Vector3.new(0, 0.08, z), "Dark stone grey", Enum.Material.Metal)
+		makePart(folder, "Rail", Vector3.new(W-4, 0.15, 0.3), Vector3.new(0, 0.25, z), "Dark stone grey", Enum.Material.Metal)
 	end
 	-- Track bed
-	makePart(folder, "TrackBed", Vector3.new(W-4, 0.1, 8), Vector3.new(0, 0.02, 0), "Brown", Enum.Material.Slate)
+	makePart(folder, "TrackBed", Vector3.new(W-4, 0.1, 8), Vector3.new(0, 0.12, 0), "Brown", Enum.Material.Slate)
 
 	-- Concrete walls (underground feel)
 	makeWalls(folder, W, D, 10, 4, "Medium stone grey", Enum.Material.Concrete)
@@ -131,11 +131,11 @@ local function buildSubway(folder, W, D)
 
 	-- Overhead fluorescent lights
 	for x = -W/2 + 8, W/2 - 8, 16 do
-		local lp = makePart(folder, "SubwayLight", Vector3.new(3, 0.3, 0.6), Vector3.new(x, 10, 0), "Institutional white", Enum.Material.Neon)
+		local lp = makePart(folder, "SubwayLight", Vector3.new(3, 0.3, 0.6), Vector3.new(x, 10, 0), "Institutional white", Enum.Material.SmoothPlastic)
 		local light = Instance.new("PointLight")
-		light.Color = Color3.fromRGB(200, 255, 200)
-		light.Brightness = 1.5
-		light.Range = 25
+		light.Color = Color3.fromRGB(220, 230, 220)
+		light.Brightness = 0.7
+		light.Range = 18
 		light.Parent = lp
 	end
 

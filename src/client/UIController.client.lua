@@ -234,6 +234,7 @@ Hold Left Click - Heavy Attack
 Left Click (holding item) - Use Item
 Right Click - Block
 Shift / Q - Dodge
+Ctrl (hold) - Sprint
 E - Pick Up Item
 F - Throw Held Item
 R - Drop Held Item

@@ -1034,6 +1034,8 @@ Players.PlayerAdded:Connect(function(player)
 		dodgeVal.Parent = character
 
 		local humanoid = character:WaitForChild("Humanoid")
+		humanoid.WalkSpeed = CombatConfig.PlayerWalkSpeed
+		humanoid.JumpPower = CombatConfig.PlayerJumpPower
 		humanoid.Died:Connect(function()
 			clearHeldItem(player)
 			playerDeaths[player.UserId] = true
