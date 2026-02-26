@@ -11,6 +11,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
+local ContentProvider = game:GetService("ContentProvider")
 
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -24,6 +25,7 @@ local CharacterStates = require(Shared:WaitForChild("CharacterStates"))
 local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
 local BlockEvent = ReplicatedStorage:WaitForChild("BlockEvent")
 local DodgeEvent = ReplicatedStorage:WaitForChild("DodgeEvent")
+local GrabEvent = ReplicatedStorage:WaitForChild("GrabEvent")
 local ComicBubbleEvent = ReplicatedStorage:WaitForChild("ComicBubbleEvent", 10)
 local ItemInteractEvent = ReplicatedStorage:WaitForChild("ItemInteractEvent")
 local HeldItemStateEvent = ReplicatedStorage:WaitForChild("HeldItemStateEvent")
@@ -37,6 +39,7 @@ local isBlocking = false
 local mouseHoldStart = 0
 local isHolding = false
 local attackCooldownEnd = 0
+local lastGrabTime = 0
 local heldItemType = nil
 local lastItemUseTime = 0
 local isSprinting = false
@@ -44,6 +47,7 @@ local playerSM = nil -- StateMachine, created on CharacterAdded
 
 local BASE_WALK_SPEED = CombatConfig.PlayerWalkSpeed or 20
 local SPRINT_WALK_SPEED = BASE_WALK_SPEED * 1.5
+local grabConfig = CombatConfig.Grab or {}
 local audioConfig = CombatConfig.Audio or {}
 local sfxConfig = audioConfig.SFX or {}
 
@@ -65,6 +69,25 @@ local sfxHit = createSfx("Hit", sfxConfig.HitId, sfxConfig.Volume)
 local sfxHurt = createSfx("Hurt", sfxConfig.HurtId, sfxConfig.Volume)
 local sfxBlock = createSfx("Block", sfxConfig.BlockId, sfxConfig.Volume)
 local sfxPickup = createSfx("Pickup", sfxConfig.PickupId, sfxConfig.Volume)
+
+local sfxToPreload = {}
+for _, sfx in ipairs({sfxAttackLight, sfxAttackHeavy, sfxHit, sfxHurt, sfxBlock, sfxPickup}) do
+	if sfx then
+		table.insert(sfxToPreload, sfx)
+	end
+end
+if #sfxToPreload > 0 then
+	task.spawn(function()
+		ContentProvider:PreloadAsync(sfxToPreload)
+	end)
+end
+
+local function playSfx(sound)
+	if not sound then return end
+	sound:Stop()
+	sound.TimePosition = 0
+	sound:Play()
+end
 
 -- Get character safely
 local function getCharacter()
@@ -99,6 +122,36 @@ local function getLookDirection()
 		return hrp.CFrame.LookVector
 	end
 	return Vector3.new(0, 0, -1)
+end
+
+local function findLocalGrabTarget()
+	local enemiesFolder = workspace:FindFirstChild("Enemies")
+	local hrp = getHumanoidRootPart()
+	if not enemiesFolder or not hrp then return nil end
+
+	local maxRange = grabConfig.Range or 7
+	local facing = hrp.CFrame.LookVector
+	local bestEnemy = nil
+	local bestDist = maxRange + 0.001
+
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy.PrimaryPart then
+			local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if enemyHumanoid and enemyHumanoid.Health > 0 then
+				local delta = enemy.PrimaryPart.Position - hrp.Position
+				local dist = delta.Magnitude
+				if dist <= maxRange and dist < bestDist then
+					local dot = dist > 0 and delta.Unit:Dot(facing) or 1
+					if dot > 0.2 then
+						bestEnemy = enemy
+						bestDist = dist
+					end
+				end
+			end
+		end
+	end
+
+	return bestEnemy
 end
 
 -- Exaggerated uppercut: player jumps up
@@ -193,9 +246,9 @@ local function doAttack(attackType)
 	-- Play local effects
 	playAttackAnimation(attackType)
 	if attackType == "HeavyAttack" then
-		if sfxAttackHeavy then sfxAttackHeavy:Play() end
+		playSfx(sfxAttackHeavy)
 	else
-		if sfxAttackLight then sfxAttackLight:Play() end
+		playSfx(sfxAttackLight)
 	end
 
 	-- Fire combo update for UI
@@ -313,6 +366,39 @@ local function doDodge()
 	end)
 end
 
+local function tryGrabSuplex()
+	if not isAlive() then return false end
+	if isBlocking or heldItemType then return false end
+	if playerSM and playerSM:IsLocked() then return false end
+
+	local now = tick()
+	local cooldown = grabConfig.Cooldown or 1.25
+	if now - lastGrabTime < cooldown then
+		return false
+	end
+
+	local target = findLocalGrabTarget()
+	if not target then
+		return false
+	end
+
+	lastGrabTime = now
+	isHolding = false
+
+	if playerSM then
+		playerSM:SetState("Grabbing", true)
+	else
+		local char = getCharacter()
+		if char and AnimationManager.HasJoints(char) then
+			AnimationManager.PlaySuplex(char)
+		end
+	end
+
+	GrabEvent:FireServer(target)
+	playSfx(sfxAttackHeavy)
+	return true
+end
+
 ------------------------------------------------------------
 -- INPUT HANDLING
 ------------------------------------------------------------
@@ -331,7 +417,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		isBlocking = true
 		BlockEvent:FireServer(true)
 		if playerSM then playerSM:SetState("Blocking", true) end
-		if sfxBlock then sfxBlock:Play() end
+		playSfx(sfxBlock)
 		local char = getCharacter()
 		if char and AnimationManager.HasJoints(char) then
 			AnimationManager.PlayBlock(char)
@@ -348,6 +434,10 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 	if input.KeyCode == Enum.KeyCode.E then
 		tryPickupItem()
+	end
+
+	if input.KeyCode == Enum.KeyCode.G then
+		tryGrabSuplex()
 	end
 
 	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
@@ -378,6 +468,7 @@ UserInputService.InputEnded:Connect(function(input, processed)
 	end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		if not isBlocking then return end
 		isBlocking = false
 		BlockEvent:FireServer(false)
 		if playerSM and playerSM:GetState() == "Blocking" then
@@ -467,7 +558,7 @@ end)
 local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
 DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
 	if wasBlocked then return end
-	if sfxHurt then sfxHurt:Play() end
+	playSfx(sfxHurt)
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) and not isBlocking then
 		if playerSM then playerSM:SetState("HitStun", true) end
@@ -482,7 +573,7 @@ EnemyHitEvent.OnClientEvent:Connect(function(enemy, hitType)
 	local hrp = getHumanoidRootPart()
 	if not hrp then return end
 	if (enemy.PrimaryPart.Position - hrp.Position).Magnitude <= 45 then
-		sfxHit:Play()
+		playSfx(sfxHit)
 	end
 end)
 
@@ -501,7 +592,7 @@ HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
 	local wasHolding = heldItemType ~= nil
 	heldItemType = itemType
 	if itemType and not wasHolding and sfxPickup then
-		sfxPickup:Play()
+		playSfx(sfxPickup)
 	elseif not itemType then
 		lastItemUseTime = 0
 	end

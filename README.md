@@ -4,7 +4,7 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 
 ## Features
 
-- **3D Beat-em-up Combat** — Light attacks, heavy attacks, combos, blocking, and dodging
+- **3D Beat-em-up Combat** — Light attacks, heavy attacks, combos, grab suplexes, blocking, and dodging
 - **R15 Character Rig** — Player and enemy fighters use R15 rigs for less boxy silhouettes and smoother joint motion
 - **3 Enemy Types** — Thugs (basic), Brawlers (tanky), Speedsters (fast)
 - **Level Selector + Difficulty** — Choose Alley District, Subway Yard, or Rooftop Run with Easy/Normal/Hard before starting
@@ -23,6 +23,7 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 | Left Click | Light Attack |
 | Hold Left Click | Heavy Attack |
 | Right Click | Block |
+| G | Grab + Suplex |
 | Shift / Q | Dodge |
 | Mouse | Aim direction |
 
@@ -30,7 +31,8 @@ A 3D beat-em-up arcade game for Roblox, inspired by TMNT and Streets of Rage. Fi
 
 - **Light Attack**: Quick punch, chainable into combos (up to 4 hits)
 - **Heavy Attack**: Hold click to charge, deals 2.5x damage with knockback
-- **Block**: Reduces incoming damage by 75%, shown as a shield visual
+- **Grab + Suplex**: Press G near a front enemy to grab at the waist and flip-slam for heavy damage
+- **Block**: Hold right click to guard with a high arm-cover block and reduce incoming damage by 75%
 - **Dodge**: Quick dash with invincibility frames, 1s cooldown
 - **Combos**: Chain light attacks for increasing damage multipliers (1.0x → 1.5x)
 
@@ -125,7 +127,7 @@ brawl-alley/
 - **Shared** modules provide configuration and utilities used by both
 - Communication via RemoteEvents for all client-server interaction
 - Enemy AI runs on server at 5 ticks/second for performance
-- Blocking/dodging state synced to server for damage reduction
+- Blocking/dodging/grab actions synced to server for authoritative combat resolution
 
 ## License
 

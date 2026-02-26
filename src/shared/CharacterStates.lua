@@ -114,6 +114,16 @@ CharacterStates.Player = {
 		end,
 	},
 
+	Grabbing = {
+		lockDuration = CombatConfig.Grab and CombatConfig.Grab.ActionLockDuration or 0.6,
+		enter = function(model, prevState, sm)
+			AnimationManager.PlaySuplex(model)
+		end,
+		canExit = function(model, nextState)
+			return nextState == "Dead" or nextState == "HitStun"
+		end,
+	},
+
 	Blocking = {
 		enter = function(model, prevState, sm)
 			AnimationManager.PlayBlock(model)

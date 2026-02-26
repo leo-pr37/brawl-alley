@@ -44,6 +44,16 @@ CombatConfig.DodgeIFrames = 0.4
 CombatConfig.DodgeDistance = 20
 CombatConfig.DodgeCooldown = 1.0
 
+-- Grab/Suplex
+CombatConfig.Grab = {
+	Range = 7,
+	Cooldown = 1.25,
+	Damage = 24,
+	ActionLockDuration = 0.6,
+	GrabOffset = 2.2,
+	SlamKnockbackForce = 36,
+}
+
 -- Score
 CombatConfig.ScorePerKill = 100
 CombatConfig.ScorePerHit = 10

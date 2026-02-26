@@ -10,6 +10,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
 local SoundService = game:GetService("SoundService")
+local ContentProvider = game:GetService("ContentProvider")
 
 local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -67,6 +68,18 @@ end
 
 local lobbyMusic = createMusic("LobbyMusic", musicConfig.LobbyTrackId, musicConfig.Volume)
 local battleMusic = createMusic("BattleMusic", musicConfig.BattleTrackId, musicConfig.Volume)
+
+local musicToPreload = {}
+for _, music in ipairs({lobbyMusic, battleMusic}) do
+	if music then
+		table.insert(musicToPreload, music)
+	end
+end
+if #musicToPreload > 0 then
+	task.spawn(function()
+		ContentProvider:PreloadAsync(musicToPreload)
+	end)
+end
 
 local function setMusicState(stateName)
 	local inBattle = (stateName == "Playing")
@@ -332,6 +345,7 @@ Left Click - Light Attack
 Hold Left Click - Heavy Attack
 Left Click (holding item) - Use Item
 Right Click - Block
+G - Grab + Suplex
 Shift / Q - Dodge
 Ctrl (hold) - Sprint
 E - Pick Up Item

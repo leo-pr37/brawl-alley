@@ -43,6 +43,7 @@ local ItemInteractEvent = createRemote("RemoteEvent", "ItemInteractEvent")
 local HeldItemStateEvent = createRemote("RemoteEvent", "HeldItemStateEvent")
 local BlockEvent = createRemote("RemoteEvent", "BlockEvent")
 local DodgeEvent = createRemote("RemoteEvent", "DodgeEvent")
+local GrabEvent = createRemote("RemoteEvent", "GrabEvent")
 local TeamStatusEvent = createRemote("RemoteEvent", "TeamStatusEvent")
 
 -- Game state
@@ -54,6 +55,7 @@ local playerScores = {} -- per-player scores
 local playerDeaths = {} -- track dead players
 local heldItems = {}
 local itemUseCooldowns = {}
+local grabUseCooldowns = {}
 local itemSpawnerRunning = false
 local enemyHeldItems = setmetatable({}, { __mode = "k" })
 local enemyMoveAnimTimes = setmetatable({}, { __mode = "k" })
@@ -445,6 +447,194 @@ local function applyEnemyKnockback(enemy, velocity, yForce, duration)
 	bv.Velocity = Vector3.new(velocity.X, yForce or 0, velocity.Z)
 	bv.Parent = enemy.PrimaryPart
 	Debris:AddItem(bv, duration or 0.2)
+end
+
+local function captureAndDisableCollisions(model)
+	local snapshot = {}
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BasePart") then
+			table.insert(snapshot, {
+				part = desc,
+				canCollide = desc.CanCollide,
+				massless = desc.Massless,
+			})
+			desc.CanCollide = false
+			desc.Massless = true
+		end
+	end
+	return snapshot
+end
+
+local function restoreCollisionSnapshot(snapshot)
+	for _, info in ipairs(snapshot) do
+		local part = info.part
+		if part and part.Parent then
+			part.CanCollide = info.canCollide
+			part.Massless = info.massless
+		end
+	end
+end
+
+local function findSuplexTarget(player, requestedEnemy)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		return nil
+	end
+
+	local hrp = player.Character.HumanoidRootPart
+	local grabConfig = CombatConfig.Grab or {}
+	local maxRange = grabConfig.Range or 7
+	local facing = hrp.CFrame.LookVector
+	local bestEnemy = nil
+	local bestDist = maxRange + 0.001
+
+	local function tryCandidate(enemy)
+		if not enemy or enemy.Parent ~= enemiesFolder or not enemy.PrimaryPart then
+			return
+		end
+		local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+		if not enemyHumanoid or enemyHumanoid.Health <= 0 then
+			return
+		end
+		local delta = enemy.PrimaryPart.Position - hrp.Position
+		local dist = delta.Magnitude
+		if dist > maxRange or dist >= bestDist then
+			return
+		end
+		local dot = dist > 0 and delta.Unit:Dot(facing) or 1
+		if dot <= 0.2 then
+			return
+		end
+		bestEnemy = enemy
+		bestDist = dist
+	end
+
+	if requestedEnemy and requestedEnemy:IsA("Model") then
+		tryCandidate(requestedEnemy)
+	end
+	for _, enemy in ipairs(Utils.GetEnemiesInRange(hrp.Position, maxRange, enemiesFolder)) do
+		if enemy ~= requestedEnemy then
+			tryCandidate(enemy)
+		end
+	end
+
+	return bestEnemy, facing
+end
+
+local function doSuplex(player, enemy, facing)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		return false
+	end
+	if not enemy or enemy.Parent ~= enemiesFolder or not enemy.PrimaryPart then
+		return false
+	end
+
+	local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+	if not enemyHumanoid or enemyHumanoid.Health <= 0 then
+		return false
+	end
+
+	local hrp = player.Character.HumanoidRootPart
+	local grabConfig = CombatConfig.Grab or {}
+	local grabOffset = grabConfig.GrabOffset or 2.2
+	local slamDamage = grabConfig.Damage or 24
+	local slamKnockback = grabConfig.SlamKnockbackForce or 36
+	local forward = (facing and facing.Magnitude > 0) and facing.Unit or hrp.CFrame.LookVector
+	local enemyRoot = enemy.PrimaryPart
+	local collisionSnapshot = captureAndDisableCollisions(enemy)
+	local previousPlatformStand = enemyHumanoid.PlatformStand
+	local previousAutoRotate = enemyHumanoid.AutoRotate
+	local released = false
+
+	local function releaseEnemy()
+		if released then
+			return
+		end
+		released = true
+		if enemyRoot and enemyRoot.Parent then
+			enemyRoot.Anchored = false
+			enemyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+			enemyRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+		end
+		if enemyHumanoid and enemyHumanoid.Parent then
+			enemyHumanoid.PlatformStand = previousPlatformStand
+			enemyHumanoid.AutoRotate = previousAutoRotate
+		end
+		restoreCollisionSnapshot(collisionSnapshot)
+	end
+
+	enemyRoot.Anchored = true
+	enemyHumanoid.PlatformStand = true
+	enemyHumanoid.AutoRotate = false
+	local grabPos = hrp.Position + forward * math.max(0.8, grabOffset - 0.5) + Vector3.new(0, 1.05, 0)
+	enemyRoot.CFrame = CFrame.new(grabPos, hrp.Position + Vector3.new(0, 1.05, 0)) * CFrame.Angles(-math.rad(38), 0, 0)
+	enemyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	enemyRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+	local esm = enemyStateMachines[enemy]
+	if esm then
+		esm:SetState("HitStun", true)
+	end
+
+	task.delay(0.12, function()
+		if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+			releaseEnemy()
+			return
+		end
+		if not enemyRoot.Parent or not enemyHumanoid.Parent then
+			releaseEnemy()
+			return
+		end
+
+		local currentRoot = player.Character:FindFirstChild("HumanoidRootPart")
+		if not currentRoot then
+			releaseEnemy()
+			return
+		end
+		local liftPos = currentRoot.Position + forward * 0.15 + Vector3.new(0, 3.25, 0)
+		enemyRoot.CFrame = CFrame.new(liftPos, liftPos - forward) * CFrame.Angles(-math.rad(96), 0, 0)
+		enemyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		enemyRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+		task.delay(0.14, function()
+			if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+				releaseEnemy()
+				return
+			end
+			if not enemyRoot.Parent or not enemyHumanoid.Parent then
+				releaseEnemy()
+				return
+			end
+
+			local slamRoot = player.Character:FindFirstChild("HumanoidRootPart")
+			if not slamRoot then
+				releaseEnemy()
+				return
+			end
+
+			local slamPos = slamRoot.Position - forward * (grabOffset - 0.1) + Vector3.new(0, 1.0, 0)
+			enemyRoot.CFrame = CFrame.new(slamPos, slamPos - forward) * CFrame.Angles(math.rad(100), 0, 0)
+			enemyRoot.Anchored = false
+			enemyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+			enemyRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+			if enemyHumanoid.Health > 0 then
+				enemyHumanoid:TakeDamage(slamDamage)
+				updateEnemyHealthBar(enemy, enemyHumanoid)
+				applyEnemyKnockback(enemy, -forward * slamKnockback, 5, 0.25)
+				ComicBubbleEvent:FireAllClients(enemy, "heavy", enemy.PrimaryPart.Position)
+				EnemyHitEvent:FireAllClients(enemy, "hit", slamRoot.Position, "Suplex")
+				totalScore = totalScore + CombatConfig.ScorePerHit
+				ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
+			end
+
+			task.delay(0.18, releaseEnemy)
+		end)
+	end)
+
+	-- Failsafe so enemy never stays collisionless/anchored on interruption.
+	task.delay(0.8, releaseEnemy)
+
+	return true
 end
 
 local function tryMeleeItemSwing(player, damage, range, knockbackForce)
@@ -1190,6 +1380,34 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 	end
 end)
 
+GrabEvent.OnServerEvent:Connect(function(player, requestedEnemy)
+	if gameState ~= "Playing" then return end
+	if not activeTeam[player.UserId] then return end
+	if heldItems[player.UserId] then return end
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+
+	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	local now = tick()
+	local cooldown = (CombatConfig.Grab and CombatConfig.Grab.Cooldown) or 1.25
+	if now - (grabUseCooldowns[player.UserId] or 0) < cooldown then
+		return
+	end
+
+	local targetEnemy, facing = findSuplexTarget(player, requestedEnemy)
+	if not targetEnemy then
+		return
+	end
+
+	grabUseCooldowns[player.UserId] = now
+	local blockVal = player.Character:FindFirstChild("IsBlocking")
+	if blockVal then
+		blockVal.Value = false
+	end
+	doSuplex(player, targetEnemy, facing)
+end)
+
 ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 	if gameState ~= "Playing" then return end
 	if not activeTeam[player.UserId] then return end
@@ -1334,6 +1552,7 @@ Players.PlayerRemoving:Connect(function(player)
 	activeTeam[player.UserId] = nil
 	heldItems[player.UserId] = nil
 	itemUseCooldowns[player.UserId] = nil
+	grabUseCooldowns[player.UserId] = nil
 	refreshLobbyTeamStatus()
 	if gameState == "Playing" and checkAllPlayersDead() then
 		endGame()

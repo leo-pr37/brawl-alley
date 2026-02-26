@@ -390,25 +390,77 @@ function AnimationManager.PlayHeavyPunch(model)
 	queueReset(model, 0.45, 0.3)
 end
 
+function AnimationManager.PlaySuplex(model)
+	cancelQueuedReset(model)
+	local s = 1
+	local motors = getAllMotors(model)
+	if not motors.RootJoint or not motors.RightShoulder then return end
+
+	-- Reach in and clinch.
+	tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(12), 0, 0), 0.12)
+	tweenMotor(motors.RightShoulder,
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-55), math.rad(-15), math.rad(20)),
+		0.12)
+	if motors.LeftShoulder then
+		tweenMotor(motors.LeftShoulder,
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-55), math.rad(15), math.rad(-20)),
+			0.12)
+	end
+	if motors.RightHip then
+		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.12)
+	end
+	if motors.LeftHip then
+		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.12)
+	end
+
+	task.delay(0.14, function()
+		-- Bridge and throw.
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-28), 0, 0), 0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		tweenMotor(motors.RightShoulder,
+			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(130), math.rad(10), math.rad(-10)),
+			0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(130), math.rad(-10), math.rad(10)),
+				0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		end
+		if motors.RightHip then
+			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-25), 0, 0), 0.14)
+		end
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-25), 0, 0), 0.14)
+		end
+	end)
+
+	queueReset(model, 0.58, 0.25)
+end
+
 function AnimationManager.PlayBlock(model)
 	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
 
+	-- High guard: forearms forward/up to protect the head.
 	tweenMotor(motors.RightShoulder,
-		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-80), math.rad(-30), math.rad(20)),
+		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(48), math.rad(-18), math.rad(58)),
 		0.1)
 	if motors.LeftShoulder then
 		tweenMotor(motors.LeftShoulder,
-			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-80), math.rad(30), math.rad(-20)),
+			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(48), math.rad(18), math.rad(-58)),
 			0.1)
 	end
+	if motors.RootJoint then
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-8), 0, 0), 0.1)
+	end
+	if motors.Neck then
+		tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+	end
 	if motors.RightHip then
-		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(14), 0, 0), 0.1)
 	end
 	if motors.LeftHip then
-		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(14), 0, 0), 0.1)
 	end
 end
 
