@@ -2,6 +2,12 @@
   "name": "BrawlAlley",
   "tree": {
     "$className": "DataModel",
+    "ServerStorage": {
+      "$className": "ServerStorage",
+      "NPCs": {
+        "$path": "assets/npcs"
+      }
+    },
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "Server": {
