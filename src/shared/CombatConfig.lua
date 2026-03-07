@@ -59,6 +59,33 @@ CombatConfig.ScorePerKill = 100
 CombatConfig.ScorePerHit = 10
 CombatConfig.ComboScoreBonus = 50 -- per combo level
 
+-- Money economy
+CombatConfig.Money = {
+	KillReward = 25,
+	HitReward = 3,
+}
+
+CombatConfig.Shop = {
+	Weapon = 40,
+	Sword = 55,
+	Pistol = 75,
+	Rock = 20,
+	HealthPack = 30,
+	Shield = 45,
+	StaminaPotion = 25,
+}
+
+-- Stamina system
+CombatConfig.Stamina = {
+	Max = 100,
+	SprintDrainPerSecond = 28,
+	RegenPerSecond = 14,
+	RegenDelay = 1.4,
+	MinToStartSprint = 12,
+	LightAttackCost = 8,
+	HeavyAttackCost = 18,
+}
+
 -- Ground item system
 CombatConfig.Items = {
 	PickupRange = 8,
@@ -79,11 +106,35 @@ CombatConfig.Items = {
 		ProjectileLifetime = 4,
 		KnockbackForce = 28,
 	},
+	Sword = {
+		SwingDamage = 42,
+		SwingRange = 8,
+		SwingCooldown = 0.6,
+		ThrowDamage = 24,
+		ThrowSpeed = 82,
+		ThrowCooldown = 0.9,
+		ProjectileLifetime = 4,
+		KnockbackForce = 34,
+	},
+	Pistol = {
+		ShotDamage = 18,
+		ShotSpeed = 160,
+		ShotCooldown = 0.38,
+		ProjectileLifetime = 3,
+		MaxRange = 140,
+	},
 	Rock = {
 		ThrowDamage = 22,
 		ThrowSpeed = 90,
 		ThrowCooldown = 0.6,
 		ProjectileLifetime = 5,
+	},
+	Shield = {
+		AbsorbAmount = 35,
+		MaxAbsorb = 75,
+	},
+	StaminaPotion = {
+		RestoreAmount = 45,
 	},
 }
 

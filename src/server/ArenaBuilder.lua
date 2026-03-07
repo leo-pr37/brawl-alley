@@ -5,6 +5,7 @@
 ]]
 
 local ArenaBuilder = {}
+local Lighting = game:GetService("Lighting")
 
 ------------------------------------------------------------
 -- SHARED HELPERS
@@ -47,9 +48,40 @@ local function addLamp(parent, pos, lightColor)
 	local head = makePart(parent, "LampHead", Vector3.new(1.5, 0.5, 1.5), pos + Vector3.new(0, 5.25, 0), "Institutional white", Enum.Material.Neon)
 	local light = Instance.new("PointLight")
 	light.Color = lightColor
-	light.Brightness = 2
-	light.Range = 30
+	light.Brightness = 3.5
+	light.Range = 42
 	light.Parent = pole
+end
+
+local function applyLevelLighting(levelKey)
+	-- Global baseline: brighter and less fog-heavy than the original night setup.
+	Lighting.Brightness = 2.4
+	Lighting.ClockTime = 14.0
+	Lighting.Ambient = Color3.fromRGB(95, 95, 105)
+	Lighting.OutdoorAmbient = Color3.fromRGB(120, 120, 130)
+	Lighting.FogStart = 220
+	Lighting.FogEnd = 1000
+	Lighting.FogColor = Color3.fromRGB(170, 170, 180)
+	Lighting.GlobalShadows = true
+
+	-- Level flavor tweaks while staying readable.
+	if levelKey == "Subway" then
+		Lighting.ClockTime = 15.0
+		Lighting.Ambient = Color3.fromRGB(105, 110, 120)
+		Lighting.OutdoorAmbient = Color3.fromRGB(130, 135, 145)
+	elseif levelKey == "Rooftops" then
+		Lighting.ClockTime = 15.5
+		Lighting.Ambient = Color3.fromRGB(105, 105, 115)
+		Lighting.OutdoorAmbient = Color3.fromRGB(135, 135, 145)
+	elseif levelKey == "Warehouse" then
+		Lighting.ClockTime = 14.5
+		Lighting.Ambient = Color3.fromRGB(110, 108, 102)
+		Lighting.OutdoorAmbient = Color3.fromRGB(135, 132, 125)
+	elseif levelKey == "FightClub" then
+		Lighting.ClockTime = 13.5
+		Lighting.Ambient = Color3.fromRGB(105, 95, 95)
+		Lighting.OutdoorAmbient = Color3.fromRGB(130, 120, 120)
+	end
 end
 
 ------------------------------------------------------------
@@ -134,8 +166,8 @@ local function buildSubway(folder, W, D)
 		local lp = makePart(folder, "SubwayLight", Vector3.new(3, 0.3, 0.6), Vector3.new(x, 10, 0), "Institutional white", Enum.Material.SmoothPlastic)
 		local light = Instance.new("PointLight")
 		light.Color = Color3.fromRGB(220, 230, 220)
-		light.Brightness = 0.7
-		light.Range = 18
+		light.Brightness = 2.2
+		light.Range = 28
 		light.Parent = lp
 	end
 
@@ -191,8 +223,8 @@ local function buildRooftops(folder, W, D)
 		local lp = makePart(folder, "EdgeLight", Vector3.new(1, 1, 1), Vector3.new(x, 0.5, D/2 - 2), "Institutional white", Enum.Material.Neon)
 		local light = Instance.new("PointLight")
 		light.Color = Color3.fromRGB(255, 180, 100)
-		light.Brightness = 1.5
-		light.Range = 20
+		light.Brightness = 2.4
+		light.Range = 26
 		light.Parent = lp
 	end
 
@@ -200,10 +232,67 @@ local function buildRooftops(folder, W, D)
 end
 
 ------------------------------------------------------------
+-- LEVEL: WAREHOUSE
+------------------------------------------------------------
+local function buildWarehouse(folder, W, D)
+	makePart(folder, "Ground", Vector3.new(W+20, 1, D+20), Vector3.new(0, -0.5, 0), "Dark stone grey", Enum.Material.Concrete)
+	makeWalls(folder, W, D, 14, 4, "Medium stone grey", Enum.Material.Concrete)
+
+	makePart(folder, "Ceiling", Vector3.new(W+20, 1, D+20), Vector3.new(0, 14.5, 0), "Dark stone grey", Enum.Material.Metal)
+
+	for x = -W/2 + 10, W/2 - 10, 18 do
+		makePart(folder, "ShelfPost", Vector3.new(1, 8, 1), Vector3.new(x, 4, -15), "Really black", Enum.Material.Metal)
+		makePart(folder, "ShelfBeam", Vector3.new(10, 0.7, 1), Vector3.new(x, 3, -15), "Reddish brown", Enum.Material.Wood)
+		makePart(folder, "ShelfBeam2", Vector3.new(10, 0.7, 1), Vector3.new(x, 6, -15), "Reddish brown", Enum.Material.Wood)
+	end
+
+	for _, pos in ipairs({
+		Vector3.new(-25, 1.5, 18),
+		Vector3.new(-20, 1.5, 18),
+		Vector3.new(20, 1.5, -18),
+		Vector3.new(25, 1.5, -18),
+	}) do
+		makePart(folder, "Crate", Vector3.new(3, 3, 3), pos, "Brick yellow", Enum.Material.Wood)
+	end
+
+	makeSpawn(folder, Vector3.new(0, 0.5, 16))
+end
+
+------------------------------------------------------------
+-- LEVEL: FIGHT CLUB
+------------------------------------------------------------
+local function buildFightClub(folder, W, D)
+	makePart(folder, "Ground", Vector3.new(W+20, 1, D+20), Vector3.new(0, -0.5, 0), "Really black", Enum.Material.Concrete)
+	makeWalls(folder, W, D, 12, 4, "Black", Enum.Material.Concrete)
+
+	makePart(folder, "RingFloor", Vector3.new(28, 1, 28), Vector3.new(0, 0, 0), "Dark stone grey", Enum.Material.SmoothPlastic)
+	makePart(folder, "RingRope1", Vector3.new(30, 0.3, 0.3), Vector3.new(0, 2.2, -14), "Really red", Enum.Material.Neon)
+	makePart(folder, "RingRope2", Vector3.new(30, 0.3, 0.3), Vector3.new(0, 2.2, 14), "Really red", Enum.Material.Neon)
+	makePart(folder, "RingRope3", Vector3.new(0.3, 0.3, 30), Vector3.new(-14, 2.2, 0), "Really red", Enum.Material.Neon)
+	makePart(folder, "RingRope4", Vector3.new(0.3, 0.3, 30), Vector3.new(14, 2.2, 0), "Really red", Enum.Material.Neon)
+
+	for _, z in ipairs({-24, 24}) do
+		makePart(folder, "Bench", Vector3.new(22, 1, 2), Vector3.new(0, 0.5, z), "Reddish brown", Enum.Material.Wood)
+	end
+
+	for x = -W/2 + 8, W/2 - 8, 16 do
+		local lp = makePart(folder, "ClubLight", Vector3.new(2, 0.5, 2), Vector3.new(x, 9, 0), "Institutional white", Enum.Material.Neon)
+		local light = Instance.new("PointLight")
+		light.Color = Color3.fromRGB(255, 120, 120)
+		light.Brightness = 2.6
+		light.Range = 30
+		light.Parent = lp
+	end
+
+	makeSpawn(folder, Vector3.new(0, 0.5, 18))
+end
+
+------------------------------------------------------------
 -- SPAWN POINTS PER LEVEL
 ------------------------------------------------------------
 local ARENA_WIDTH = 120
 local ARENA_DEPTH = 80
+local PLAYABLE_MARGIN = 10
 
 ArenaBuilder.SpawnPoints = {
 	Alley = {
@@ -236,12 +325,34 @@ ArenaBuilder.SpawnPoints = {
 		{pos = Vector3.new(-20, 12, 0)},
 		{pos = Vector3.new( 25, 12, 0)},
 	},
+	Warehouse = {
+		{pos = Vector3.new(-ARENA_WIDTH/2 + 6, 3, -10)},
+		{pos = Vector3.new(-ARENA_WIDTH/2 + 6, 3, 10)},
+		{pos = Vector3.new( ARENA_WIDTH/2 - 6, 3, -10)},
+		{pos = Vector3.new( ARENA_WIDTH/2 - 6, 3, 10)},
+		{pos = Vector3.new(-18, 3, -ARENA_DEPTH/2 + 6)},
+		{pos = Vector3.new( 18, 3, -ARENA_DEPTH/2 + 6)},
+		{pos = Vector3.new(-18, 3,  ARENA_DEPTH/2 - 6)},
+		{pos = Vector3.new( 18, 3,  ARENA_DEPTH/2 - 6)},
+	},
+	FightClub = {
+		{pos = Vector3.new(-ARENA_WIDTH/2 + 6, 3, 0)},
+		{pos = Vector3.new( ARENA_WIDTH/2 - 6, 3, 0)},
+		{pos = Vector3.new(0, 3, -ARENA_DEPTH/2 + 6)},
+		{pos = Vector3.new(0, 3,  ARENA_DEPTH/2 - 6)},
+		{pos = Vector3.new(-20, 3, -20)},
+		{pos = Vector3.new( 20, 3, -20)},
+		{pos = Vector3.new(-20, 3, 20)},
+		{pos = Vector3.new( 20, 3, 20)},
+	},
 }
 
 ArenaBuilder.PlayerSpawns = {
 	Alley    = Vector3.new(0, 4, 10),
 	Subway   = Vector3.new(-20, 4, 0),
 	Rooftops = Vector3.new(20, 4, 0),
+	Warehouse = Vector3.new(0, 4, 16),
+	FightClub = Vector3.new(0, 4, 18),
 }
 
 ------------------------------------------------------------
@@ -251,23 +362,39 @@ local builders = {
 	Alley    = buildAlley,
 	Subway   = buildSubway,
 	Rooftops = buildRooftops,
+	Warehouse = buildWarehouse,
+	FightClub = buildFightClub,
 }
 
 function ArenaBuilder.Build(arenaFolder, levelKey)
 	arenaFolder:ClearAllChildren()
 	local builder = builders[levelKey] or builders.Alley
 	builder(arenaFolder, ARENA_WIDTH, ARENA_DEPTH)
+	applyLevelLighting(levelKey)
 end
 
 function ArenaBuilder.GetRandomSpawnPos(levelKey)
 	local points = ArenaBuilder.SpawnPoints[levelKey] or ArenaBuilder.SpawnPoints.Alley
 	local sp = points[math.random(1, #points)]
 	local jitter = Vector3.new(math.random(-6, 6), 0, math.random(-6, 6))
-	return sp.pos + jitter
+	return ArenaBuilder.ClampToPlayableArea(sp.pos + jitter, levelKey)
 end
 
 function ArenaBuilder.GetPlayerSpawn(levelKey)
 	return ArenaBuilder.PlayerSpawns[levelKey] or ArenaBuilder.PlayerSpawns.Alley
+end
+
+function ArenaBuilder.ClampToPlayableArea(position, levelKey)
+	local minX = -ARENA_WIDTH / 2 + PLAYABLE_MARGIN
+	local maxX = ARENA_WIDTH / 2 - PLAYABLE_MARGIN
+	local minZ = -ARENA_DEPTH / 2 + PLAYABLE_MARGIN
+	local maxZ = ARENA_DEPTH / 2 - PLAYABLE_MARGIN
+
+	return Vector3.new(
+		math.clamp(position.X, minX, maxX),
+		math.max(position.Y, 3),
+		math.clamp(position.Z, minZ, maxZ)
+	)
 end
 
 return ArenaBuilder

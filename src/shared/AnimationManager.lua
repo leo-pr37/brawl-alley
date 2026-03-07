@@ -17,11 +17,16 @@ local basePoses = setmetatable({}, { __mode = "k" })
 -- Joint rest poses (relative to parent)
 local REST_POSES = {
 	RightShoulder = CFrame.new(1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
+	["Right Shoulder"] = CFrame.new(1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
 	LeftShoulder  = CFrame.new(-1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
+	["Left Shoulder"] = CFrame.new(-1.3, 0.5, 0) * CFrame.Angles(0, 0, 0),
 	RightHip      = CFrame.new(0.5, -1, 0) * CFrame.Angles(0, 0, 0),
+	["Right Hip"] = CFrame.new(0.5, -1, 0) * CFrame.Angles(0, 0, 0),
 	LeftHip       = CFrame.new(-0.5, -1, 0) * CFrame.Angles(0, 0, 0),
+	["Left Hip"] = CFrame.new(-0.5, -1, 0) * CFrame.Angles(0, 0, 0),
 	Neck          = CFrame.new(0, 1.1, 0) * CFrame.Angles(0, 0, 0),
 	RootJoint     = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, 0),
+	Root          = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, 0),
 }
 
 ------------------------------------------------------------
@@ -43,6 +48,19 @@ local function getAllMotors(model)
 		if desc:IsA("Motor6D") then
 			motors[desc.Name] = desc
 		end
+	end
+	-- R6 compatibility aliases (default rigs use spaced joint names).
+	if not motors.RightShoulder and motors["Right Shoulder"] then
+		motors.RightShoulder = motors["Right Shoulder"]
+	end
+	if not motors.LeftShoulder and motors["Left Shoulder"] then
+		motors.LeftShoulder = motors["Left Shoulder"]
+	end
+	if not motors.RightHip and motors["Right Hip"] then
+		motors.RightHip = motors["Right Hip"]
+	end
+	if not motors.LeftHip and motors["Left Hip"] then
+		motors.LeftHip = motors["Left Hip"]
 	end
 	if not motors.RootJoint and motors.Root then
 		motors.RootJoint = motors.Root
@@ -76,6 +94,19 @@ local function setMotorDirect(motor, targetC0)
 		end
 	end
 	motor.C0 = targetC0
+end
+
+local function getBaseC0(motor)
+	if not motor then return nil end
+	local model = motor.Parent and motor.Parent.Parent
+	return model and basePoses[model] and basePoses[model][motor.Name] or motor.C0
+end
+
+local function setMotorBaseOffset(motor, offset)
+	if not motor then return end
+	local baseC0 = getBaseC0(motor)
+	if not baseC0 then return end
+	motor.C0 = baseC0 * (offset or CFrame.new())
 end
 
 local function tweenMotor(motor, targetC0, duration, easingStyle, easingDir)
@@ -122,6 +153,30 @@ local function queueReset(model, delayTime, duration)
 	end)
 end
 
+local function resetSelectedPose(model, duration, motorNames)
+	if not model then return end
+	duration = duration or 0.2
+	local motors = getAllMotors(model)
+	local modelBasePoses = basePoses[model]
+	for _, name in ipairs(motorNames) do
+		local motor = motors[name]
+		local rest = motor and ((modelBasePoses and modelBasePoses[motor.Name]) or REST_POSES[motor.Name] or REST_POSES[name])
+		if motor and rest then
+			tweenMotor(motor, rest, duration)
+		end
+	end
+end
+
+local function queueSelectedReset(model, delayTime, duration, motorNames)
+	if not model then return end
+	cancelQueuedReset(model)
+	local token = resetTokens[model]
+	task.delay(delayTime, function()
+		if not model or resetTokens[model] ~= token then return end
+		resetSelectedPose(model, duration, motorNames)
+	end)
+end
+
 function AnimationManager.ResetPose(model, duration)
 	cancelQueuedReset(model)
 	duration = duration or 0.2
@@ -133,6 +188,10 @@ function AnimationManager.ResetPose(model, duration)
 			tweenMotor(motor, rest, duration)
 		end
 	end
+end
+
+function AnimationManager.ResetUpperBodyPose(model, duration)
+	resetSelectedPose(model, duration, {"RightShoulder", "LeftShoulder", "Neck"})
 end
 
 function AnimationManager.HasJoints(model)
@@ -232,105 +291,65 @@ function AnimationManager.PlayLightPunch(model, comboIndex)
 	comboIndex = comboIndex or 1
 
 	if comboIndex == 1 then
-		-- Jab: right arm forward punch with more body twist
+		-- Jab: upper-body only so it blends with Roblox locomotion cleanly.
 		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(95), 0, math.rad(-5)),
+			CFrame.new(1.3*s, 0.5*s, -0.1) * CFrame.Angles(math.rad(102), math.rad(-10), math.rad(-8)),
 			0.07, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(35), 0, math.rad(20)),
+				CFrame.new(-1.3*s, 0.5*s, -0.04) * CFrame.Angles(math.rad(58), math.rad(18), math.rad(10)),
 				0.07)
 		end
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-5), math.rad(-20), 0), 0.07)
-		end
-		-- Front foot steps
-		if motors.LeftHip then
-			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
-		end
-		queueReset(model, 0.15, 0.12)
+		queueSelectedReset(model, 0.15, 0.12, {"RightShoulder", "LeftShoulder"})
 
 	elseif comboIndex == 2 then
-		-- Cross: left arm with big twist
+		-- Cross.
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(95), 0, math.rad(5)),
+				CFrame.new(-1.3*s, 0.5*s, -0.1) * CFrame.Angles(math.rad(102), math.rad(10), math.rad(8)),
 				0.07, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 		end
 		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(35), 0, math.rad(-20)),
+			CFrame.new(1.3*s, 0.5*s, -0.04) * CFrame.Angles(math.rad(58), math.rad(-18), math.rad(-10)),
 			0.07)
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-5), math.rad(25), 0), 0.07)
-		end
-		if motors.RightHip then
-			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
-		end
-		queueReset(model, 0.15, 0.12)
+		queueSelectedReset(model, 0.15, 0.12, {"RightShoulder", "LeftShoulder"})
 
 	elseif comboIndex == 3 then
-		-- Hook: dramatic side swing with full body rotation
+		-- Hook.
 		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(75), math.rad(-70), math.rad(25)),
+			CFrame.new(1.3*s, 0.5*s, -0.08) * CFrame.Angles(math.rad(88), math.rad(-55), math.rad(20)),
 			0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-8), math.rad(-35), math.rad(-5)), 0.05)
-		end
-		if motors.LeftHip then
-			tweenMotor(motors.LeftHip,
-				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-20), 0, 0),
-				0.05)
-		end
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(20), 0, math.rad(25)),
+				CFrame.new(-1.3*s, 0.5*s, -0.04) * CFrame.Angles(math.rad(42), math.rad(20), math.rad(16)),
 				0.05)
 		end
-		queueReset(model, 0.18, 0.15)
+		queueSelectedReset(model, 0.18, 0.15, {"RightShoulder", "LeftShoulder"})
 
 	elseif comboIndex == 4 then
-		-- UPPERCUT: BIG wind down then explosive upward (player also jumps via CombatController)
-		-- Wind down: deep crouch
+		-- Uppercut wind-up.
 		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-40), 0, math.rad(-15)),
+			CFrame.new(1.3*s, 0.5*s, 0.02) * CFrame.Angles(math.rad(-24), math.rad(-8), math.rad(-12)),
 			0.06)
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(20), 0, 0), 0.06)
-		end
-		if motors.RightHip then
-			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(30), 0, 0), 0.06)
-		end
-		if motors.LeftHip then
-			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(30), 0, 0), 0.06)
-		end
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(15)),
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(25), math.rad(10), math.rad(10)),
 				0.06)
 		end
 
 		task.delay(0.07, function()
-			-- EXPLODE upward — maximum extension
+			-- Explode upward.
 			tweenMotor(motors.RightShoulder,
-				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(170), math.rad(15), math.rad(-15)),
+				CFrame.new(1.3*s, 0.5*s, -0.06) * CFrame.Angles(math.rad(155), math.rad(12), math.rad(-12)),
 				0.07, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-			if motors.RootJoint then
-				tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-20), math.rad(-20), math.rad(-5)), 0.07)
-			end
 			if motors.LeftShoulder then
 				tweenMotor(motors.LeftShoulder,
-					CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(40), 0, math.rad(-20)),
+					CFrame.new(-1.3*s, 0.5*s, -0.04) * CFrame.Angles(math.rad(52), math.rad(12), math.rad(-16)),
 					0.07)
-			end
-			if motors.RightHip then
-				tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
-			end
-			if motors.LeftHip then
-				tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-10), 0, 0), 0.07)
 			end
 		end)
 
-		queueReset(model, 0.3, 0.25)
+		queueSelectedReset(model, 0.3, 0.25, {"RightShoulder", "LeftShoulder"})
 	end
 end
 
@@ -341,53 +360,29 @@ function AnimationManager.PlayHeavyPunch(model)
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
 
-	-- Wind-up: pull arm WAY back, lean back dramatically
+	-- Heavy wind-up: upper body only.
 	tweenMotor(motors.RightShoulder,
-		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-30), math.rad(50), math.rad(40)),
+		CFrame.new(1.3*s, 0.5*s, 0.04) * CFrame.Angles(math.rad(10), math.rad(38), math.rad(28)),
 		0.18)
 	if motors.LeftShoulder then
 		tweenMotor(motors.LeftShoulder,
-			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(50), 0, math.rad(25)),
+			CFrame.new(-1.3*s, 0.5*s, -0.02) * CFrame.Angles(math.rad(48), math.rad(12), math.rad(18)),
 			0.18)
-	end
-	if motors.RootJoint then
-		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(10), math.rad(40), math.rad(5)), 0.18)
-	end
-	-- Lean back on legs
-	if motors.RightHip then
-		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(15), 0, 0), 0.18)
-	end
-	if motors.LeftHip then
-		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-5), 0, 0), 0.18)
 	end
 
 	task.delay(0.2, function()
-		-- SLAM forward with maximum force
+		-- Slam forward.
 		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(110), math.rad(-25), math.rad(-15)),
+			CFrame.new(1.3*s, 0.5*s, -0.14) * CFrame.Angles(math.rad(118), math.rad(-28), math.rad(-16)),
 			0.07, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(-10)),
-				0.07)
-		end
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-15), math.rad(-40), math.rad(-5)), 0.07)
-		end
-		-- Big step forward
-		if motors.LeftHip then
-			tweenMotor(motors.LeftHip,
-				CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-30), 0, 0),
-				0.07)
-		end
-		if motors.RightHip then
-			tweenMotor(motors.RightHip,
-				CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(15), 0, 0),
+				CFrame.new(-1.3*s, 0.5*s, -0.03) * CFrame.Angles(math.rad(30), math.rad(8), math.rad(-12)),
 				0.07)
 		end
 	end)
 
-	queueReset(model, 0.45, 0.3)
+	queueSelectedReset(model, 0.45, 0.3, {"RightShoulder", "LeftShoulder"})
 end
 
 function AnimationManager.PlaySuplex(model)
@@ -437,62 +432,195 @@ end
 
 function AnimationManager.PlayBlock(model)
 	cancelQueuedReset(model)
-	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RightShoulder then return end
 
-	-- High guard: forearms forward/up to protect the head.
+	-- High cover: head tucked, elbows bent, hands near face.
 	tweenMotor(motors.RightShoulder,
-		CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(48), math.rad(-18), math.rad(58)),
+		CFrame.new(1.3, 0.5, -0.08) * CFrame.Angles(math.rad(88), math.rad(-20), math.rad(62)),
 		0.1)
 	if motors.LeftShoulder then
 		tweenMotor(motors.LeftShoulder,
-			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(48), math.rad(18), math.rad(-58)),
+			CFrame.new(-1.3, 0.5, -0.08) * CFrame.Angles(math.rad(88), math.rad(20), math.rad(-62)),
 			0.1)
 	end
-	if motors.RootJoint then
-		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-8), 0, 0), 0.1)
+	if motors.Neck then
+		tweenMotor(motors.Neck,
+			CFrame.new(0, 1.1, 0) * CFrame.Angles(math.rad(10), 0, 0),
+			0.1)
+	end
+end
+
+function AnimationManager.HoldBlockPose(model)
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+
+	-- Persistent high-cover guard while locomotion continues underneath.
+	motors.RightShoulder.Transform = CFrame.new()
+	setMotorDirect(motors.RightShoulder,
+		CFrame.new(1.3, 0.5, -0.1) * CFrame.Angles(math.rad(92), math.rad(-22), math.rad(68)))
+	if motors.LeftShoulder then
+		motors.LeftShoulder.Transform = CFrame.new()
+		setMotorDirect(motors.LeftShoulder,
+			CFrame.new(-1.3, 0.5, -0.1) * CFrame.Angles(math.rad(92), math.rad(22), math.rad(-68)))
 	end
 	if motors.Neck then
-		tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(10), 0, 0), 0.1)
+		motors.Neck.Transform = CFrame.new()
+		setMotorDirect(motors.Neck,
+			CFrame.new(0, 1.1, 0) * CFrame.Angles(math.rad(10), 0, 0))
 	end
-	if motors.RightHip then
-		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(14), 0, 0), 0.1)
+end
+
+function AnimationManager.ClearBlockPose(model)
+	local motors = getAllMotors(model)
+	if motors.RightShoulder then
+		motors.RightShoulder.Transform = CFrame.new()
+		setMotorDirect(motors.RightShoulder, REST_POSES.RightShoulder)
 	end
-	if motors.LeftHip then
-		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(14), 0, 0), 0.1)
+	if motors.LeftShoulder then
+		motors.LeftShoulder.Transform = CFrame.new()
+		setMotorDirect(motors.LeftShoulder, REST_POSES.LeftShoulder)
+	end
+	if motors.Neck then
+		motors.Neck.Transform = CFrame.new()
+		setMotorDirect(motors.Neck, REST_POSES.Neck)
 	end
 end
 
 function AnimationManager.PlayUnblock(model)
-	AnimationManager.ResetPose(model, 0.15)
+	AnimationManager.ResetUpperBodyPose(model, 0.15)
 end
 
-function AnimationManager.PlayDodge(model)
+function AnimationManager.HoldPistolPose(model, aimDirection)
+	local motors = getAllMotors(model)
+	if not motors.RightShoulder then return end
+	local hrp = model:FindFirstChild("HumanoidRootPart")
+	local localDir = Vector3.new(0, 0, -1)
+	if hrp and typeof(aimDirection) == "Vector3" and aimDirection.Magnitude > 0.05 then
+		localDir = hrp.CFrame:VectorToObjectSpace(aimDirection.Unit)
+	end
+
+	local yaw = math.clamp(math.atan2(localDir.X, -localDir.Z), math.rad(-32), math.rad(32))
+	local pitch = math.clamp(math.asin(math.clamp(localDir.Y, -1, 1)), math.rad(-28), math.rad(24))
+
+	if motors.RightShoulder then
+		motors.RightShoulder.Transform = CFrame.new()
+		setMotorBaseOffset(motors.RightShoulder,
+			CFrame.new(-0.16, -0.02, -0.18) * CFrame.Angles(math.rad(82) - pitch * 0.9, yaw * 0.8 + math.rad(-10), math.rad(-8)))
+	end
+	if motors.LeftShoulder then
+		motors.LeftShoulder.Transform = CFrame.new()
+		setMotorBaseOffset(motors.LeftShoulder,
+			CFrame.new(0.22, -0.02, -0.2) * CFrame.Angles(math.rad(60) - pitch * 0.55, yaw * 0.35 + math.rad(38), math.rad(-18)))
+	end
+	if motors.RightElbow then
+		setMotorBaseOffset(motors.RightElbow, CFrame.Angles(math.rad(-34), 0, 0))
+	end
+	if motors.LeftElbow then
+		setMotorBaseOffset(motors.LeftElbow, CFrame.Angles(math.rad(-72), 0, 0))
+	end
+	if motors.RightWrist then
+		setMotorBaseOffset(motors.RightWrist, CFrame.Angles(math.rad(8) - pitch * 0.35, 0, 0))
+	end
+	if motors.LeftWrist then
+		setMotorBaseOffset(motors.LeftWrist, CFrame.Angles(math.rad(22), 0, math.rad(-8)))
+	end
+	if motors.Neck then
+		motors.Neck.Transform = CFrame.new()
+		setMotorBaseOffset(motors.Neck, CFrame.Angles(pitch * 0.18, yaw * 0.2, 0))
+	end
+end
+
+function AnimationManager.ClearPistolPose(model)
+	local motors = getAllMotors(model)
+	if motors.RightShoulder then
+		motors.RightShoulder.Transform = CFrame.new()
+		setMotorBaseOffset(motors.RightShoulder, CFrame.new())
+	end
+	if motors.LeftShoulder then
+		motors.LeftShoulder.Transform = CFrame.new()
+		setMotorBaseOffset(motors.LeftShoulder, CFrame.new())
+	end
+	if motors.RightElbow then
+		setMotorBaseOffset(motors.RightElbow, CFrame.new())
+	end
+	if motors.LeftElbow then
+		setMotorBaseOffset(motors.LeftElbow, CFrame.new())
+	end
+	if motors.RightWrist then
+		setMotorBaseOffset(motors.RightWrist, CFrame.new())
+	end
+	if motors.LeftWrist then
+		setMotorBaseOffset(motors.LeftWrist, CFrame.new())
+	end
+	if motors.Neck then
+		motors.Neck.Transform = CFrame.new()
+		setMotorBaseOffset(motors.Neck, CFrame.new())
+	end
+end
+
+function AnimationManager.PlayDodge(model, moveDir)
 	cancelQueuedReset(model)
 	local s = 1
 	local motors = getAllMotors(model)
 	if not motors.RootJoint then return end
 
-	tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-15), 0, math.rad(25)), 0.08)
-	if motors.RightShoulder then
-		tweenMotor(motors.RightShoulder,
-			CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(30)),
-			0.08)
-	end
-	if motors.LeftShoulder then
-		tweenMotor(motors.LeftShoulder,
-			CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-20), 0, math.rad(-30)),
-			0.08)
-	end
-	if motors.RightHip then
-		tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(25), 0, 0), 0.08)
-	end
-	if motors.LeftHip then
-		tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(25), 0, 0), 0.08)
+	local sideSign = 1
+	local preferSidestep = false
+	if typeof(moveDir) == "Vector3" and moveDir.Magnitude > 0.05 then
+		local hrp = model:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			local localDir = hrp.CFrame:VectorToObjectSpace(moveDir.Unit)
+			if math.abs(localDir.X) >= 0.35 then
+				sideSign = localDir.X >= 0 and 1 or -1
+				preferSidestep = true
+			else
+				sideSign = localDir.X >= 0 and 1 or -1
+			end
+		end
 	end
 
-	queueReset(model, 0.35, 0.2)
+	if preferSidestep then
+		-- Lateral slip dodge.
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(-8), math.rad(sideSign * 8), math.rad(-sideSign * 22)), 0.07)
+		if motors.RightShoulder then
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(8), math.rad(-12), math.rad(sideSign * 25)),
+				0.07)
+		end
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(8), math.rad(12), math.rad(sideSign * 10)),
+				0.07)
+		end
+		if motors.RightHip then
+			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(18), 0, math.rad(-sideSign * 10)), 0.07)
+		end
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-6), 0, math.rad(-sideSign * 6)), 0.07)
+		end
+		queueReset(model, 0.28, 0.18)
+	else
+		-- Forward roll-like tuck.
+		tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(30), math.rad(sideSign * 6), 0), 0.07)
+		if motors.RightShoulder then
+			tweenMotor(motors.RightShoulder,
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-58), math.rad(-12), math.rad(24)),
+				0.07)
+		end
+		if motors.LeftShoulder then
+			tweenMotor(motors.LeftShoulder,
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-58), math.rad(12), math.rad(-24)),
+				0.07)
+		end
+		if motors.RightHip then
+			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(34), 0, 0), 0.07)
+		end
+		if motors.LeftHip then
+			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(34), 0, 0), 0.07)
+		end
+		queueReset(model, 0.33, 0.2)
+	end
 end
 
 -- Hit reaction: MORE DRAMATIC — bigger stagger, spin on heavy hits
@@ -502,50 +630,37 @@ function AnimationManager.PlayHitReaction(model, isHeavy)
 	local motors = getAllMotors(model)
 
 	if isHeavy then
-		-- Heavy hit: dramatic spin/stagger
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(25), math.rad(45), math.rad(10)), 0.06)
-		end
+		-- Heavy hit: upper-body recoil only.
 		if motors.Neck then
-			tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(25), math.rad(-20), math.rad(10)), 0.06)
+			tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(18), math.rad(-10), math.rad(6)), 0.06)
 		end
 		if motors.RightShoulder then
 			tweenMotor(motors.RightShoulder,
-				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(15), 0, math.rad(50)),
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(22), math.rad(-6), math.rad(36)),
 				0.06)
 		end
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-15), 0, math.rad(-50)),
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-6), math.rad(6), math.rad(-42)),
 				0.06)
 		end
-		-- Stagger legs
-		if motors.RightHip then
-			tweenMotor(motors.RightHip, CFrame.new(0.5*s, -1*s, 0) * CFrame.Angles(math.rad(-15), math.rad(10), 0), 0.06)
-		end
-		if motors.LeftHip then
-			tweenMotor(motors.LeftHip, CFrame.new(-0.5*s, -1*s, 0) * CFrame.Angles(math.rad(20), 0, 0), 0.06)
-		end
-		queueReset(model, 0.35, 0.3)
+		queueSelectedReset(model, 0.28, 0.22, {"RightShoulder", "LeftShoulder", "Neck"})
 	else
-		-- Light hit: snap backward flinch (enhanced)
-		if motors.RootJoint then
-			tweenMotor(motors.RootJoint, CFrame.Angles(math.rad(18), math.rad(8), math.rad(5)), 0.05)
-		end
+		-- Light hit: snap flinch, upper body only.
 		if motors.Neck then
-			tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(18), 0, math.rad(5)), 0.05)
+			tweenMotor(motors.Neck, CFrame.new(0, 1.1*s, 0) * CFrame.Angles(math.rad(12), 0, math.rad(4)), 0.05)
 		end
 		if motors.RightShoulder then
 			tweenMotor(motors.RightShoulder,
-				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(40)),
+				CFrame.new(1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(8), 0, math.rad(28)),
 				0.05)
 		end
 		if motors.LeftShoulder then
 			tweenMotor(motors.LeftShoulder,
-				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(-10), 0, math.rad(-40)),
+				CFrame.new(-1.3*s, 0.5*s, 0) * CFrame.Angles(math.rad(2), 0, math.rad(-30)),
 				0.05)
 		end
-		queueReset(model, 0.2, 0.2)
+		queueSelectedReset(model, 0.2, 0.18, {"RightShoulder", "LeftShoulder", "Neck"})
 	end
 end
 

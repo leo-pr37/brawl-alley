@@ -17,12 +17,13 @@ if _G.MouseFree == nil then
 end
 
 -- Camera settings
-local CAMERA_DISTANCE = 10        -- distance behind player
-local CAMERA_HEIGHT = 4            -- height above player
-local CAMERA_SHOULDER_OFFSET = 2   -- offset to the right (over right shoulder)
-local CAMERA_SMOOTHING = 0.12      -- lerp factor for position (lower = more lag)
-local CAMERA_LOOK_SMOOTHING = 0.15 -- lerp factor for look target
-local MOUSE_SENSITIVITY = 0.003    -- mouse sensitivity for rotation
+local CAMERA_DISTANCE = 7.5
+local CAMERA_PIVOT_HEIGHT = 2.6
+local CAMERA_SHOULDER_OFFSET = 2.2
+local CAMERA_SMOOTHING = 0.18
+local CAMERA_LOOK_SMOOTHING = 0.22
+local MOUSE_SENSITIVITY = 0.003
+local CHARACTER_TURN_SMOOTHING = 0.22
 
 -- State
 local yaw = 0          -- horizontal rotation (radians)
@@ -108,6 +109,7 @@ RunService.RenderStepped:Connect(function(dt)
 
 	-- Calculate camera position behind and above player
 	local playerPos = hrp.Position
+	local pivotPos = playerPos + Vector3.new(0, CAMERA_PIVOT_HEIGHT, 0)
 
 	-- Camera orbit based on yaw/pitch
 	local cosYaw = math.cos(yaw)
@@ -115,24 +117,24 @@ RunService.RenderStepped:Connect(function(dt)
 	local cosPitch = math.cos(pitch)
 	local sinPitch = math.sin(pitch)
 
-	-- Direction from player to camera (behind them)
-	local cameraDir = Vector3.new(
-		sinYaw * cosPitch,
-		sinPitch,
-		cosYaw * cosPitch
-	)
+	local lookDir = Vector3.new(
+		-sinYaw * cosPitch,
+		-sinPitch,
+		-cosYaw * cosPitch
+	).Unit
+	local flatLookDir = Vector3.new(lookDir.X, 0, lookDir.Z)
+	if flatLookDir.Magnitude < 0.001 then
+		flatLookDir = Vector3.new(0, 0, -1)
+	else
+		flatLookDir = flatLookDir.Unit
+	end
+	local rightDir = flatLookDir:Cross(Vector3.yAxis).Unit
 
-	-- Shoulder offset (perpendicular to look direction, on XZ plane)
-	local rightDir = Vector3.new(cosYaw, 0, -sinYaw)
-
-	local targetCameraPos = playerPos
-		+ cameraDir * CAMERA_DISTANCE
-		+ Vector3.new(0, CAMERA_HEIGHT, 0)
+	local targetCameraPos = pivotPos
+		- lookDir * CAMERA_DISTANCE
 		+ rightDir * CAMERA_SHOULDER_OFFSET
 
-	-- Look target: slightly ahead and above the player
-	local lookAheadDir = -cameraDir -- forward is opposite of camera direction
-	local targetLookAt = playerPos + Vector3.new(0, 1.5, 0) + Vector3.new(lookAheadDir.X, 0, lookAheadDir.Z).Unit * 3
+	local targetLookAt = pivotPos + lookDir * 8
 
 	-- Initialize positions
 	if currentCameraPos == nil then
@@ -158,7 +160,7 @@ RunService.RenderStepped:Connect(function(dt)
 	currentLookAt = currentLookAt:Lerp(targetLookAt, CAMERA_LOOK_SMOOTHING)
 
 	-- Raycast anti-clip: if camera would be inside geometry, push it forward
-	local rayOrigin = playerPos + Vector3.new(0, CAMERA_HEIGHT, 0)
+	local rayOrigin = pivotPos
 	local rayDir = currentCameraPos - rayOrigin
 	local rayParams = RaycastParams.new()
 	rayParams.FilterDescendantsInstances = {char}
@@ -186,11 +188,13 @@ RunService.Heartbeat:Connect(function()
 	if not hrp or not humanoid or humanoid.Health <= 0 then return end
 
 	-- Face character in the direction the camera is looking (XZ only)
+	humanoid.AutoRotate = false
 	local cosYaw = math.cos(yaw)
 	local sinYaw = math.sin(yaw)
 	local lookDir = Vector3.new(-sinYaw, 0, -cosYaw)
 	if lookDir.Magnitude > 0.1 then
-		hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDir)
+		local targetCF = CFrame.new(hrp.Position, hrp.Position + lookDir)
+		hrp.CFrame = hrp.CFrame:Lerp(targetCF, CHARACTER_TURN_SMOOTHING)
 	end
 end)
 

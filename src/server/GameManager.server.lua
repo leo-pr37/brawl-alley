@@ -15,16 +15,40 @@ local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local EnemyTypes = require(Shared:WaitForChild("EnemyTypes"))
 local Utils = require(Shared:WaitForChild("Utils"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
-local StateMachine = require(Shared:WaitForChild("StateMachine"))
+local StateMachine = require(Shared:WaitForChild("RuntimeStateMachine"))
 local CharacterStates = require(Shared:WaitForChild("CharacterStates"))
 local ArenaBuilder = require(script.Parent:WaitForChild("ArenaBuilder"))
 
 -- Create RemoteEvents for client-server communication
 local function createRemote(className, name)
-	local r = Instance.new(className)
-	r.Name = name
-	r.Parent = ReplicatedStorage
-	return r
+	local remotesFolder = ReplicatedStorage:FindFirstChild("Shared") and ReplicatedStorage.Shared:FindFirstChild("Remotes")
+	if not remotesFolder then
+		local sharedFolder = ReplicatedStorage:FindFirstChild("Shared")
+		if not sharedFolder then
+			sharedFolder = Instance.new("Folder")
+			sharedFolder.Name = "Shared"
+			sharedFolder.Parent = ReplicatedStorage
+		end
+		remotesFolder = sharedFolder:FindFirstChild("Remotes")
+		if not remotesFolder then
+			remotesFolder = Instance.new("Folder")
+			remotesFolder.Name = "Remotes"
+			remotesFolder.Parent = sharedFolder
+		end
+	end
+
+	local existing = remotesFolder:FindFirstChild(name)
+	if existing and existing:IsA(className) then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new(className)
+	remote.Name = name
+	remote.Parent = remotesFolder
+	return remote
 end
 
 local DamageEvent = createRemote("RemoteEvent", "DamageEvent")
@@ -41,10 +65,14 @@ local ScreenShakeEvent = createRemote("RemoteEvent", "ScreenShakeEvent")
 local ComicBubbleEvent = createRemote("RemoteEvent", "ComicBubbleEvent")
 local ItemInteractEvent = createRemote("RemoteEvent", "ItemInteractEvent")
 local HeldItemStateEvent = createRemote("RemoteEvent", "HeldItemStateEvent")
+local StaminaBoostEvent = createRemote("RemoteEvent", "StaminaBoost")
 local BlockEvent = createRemote("RemoteEvent", "BlockEvent")
 local DodgeEvent = createRemote("RemoteEvent", "DodgeEvent")
 local GrabEvent = createRemote("RemoteEvent", "GrabEvent")
 local TeamStatusEvent = createRemote("RemoteEvent", "TeamStatusEvent")
+local MoneyEvent = createRemote("RemoteEvent", "MoneyEvent")
+local ShopPurchaseEvent = createRemote("RemoteEvent", "ShopPurchase")
+local ShopResultEvent = createRemote("RemoteEvent", "ShopResult")
 
 -- Game state
 local gameState = "Lobby" -- Lobby, Playing, GameOver
@@ -52,8 +80,11 @@ local currentWave = 0
 local enemiesAlive = 0
 local totalScore = 0 -- shared score for co-op
 local playerScores = {} -- per-player scores
+local playerMoney = {} -- per-player money
 local playerDeaths = {} -- track dead players
+local playerShield = {}
 local heldItems = {}
+local playerInventories = {}
 local itemUseCooldowns = {}
 local grabUseCooldowns = {}
 local itemSpawnerRunning = false
@@ -107,6 +138,90 @@ local function resolveDifficulty(difficultyKey)
 	return DEFAULT_DIFFICULTY
 end
 
+local function getMoneyConfig()
+	return CombatConfig.Money or {}
+end
+
+local function awardMoney(player, amount, reason)
+	if not player or amount == nil or amount == 0 then
+		return
+	end
+	local uid = player.UserId
+	playerMoney[uid] = (playerMoney[uid] or 0) + amount
+	MoneyEvent:FireClient(player, playerMoney[uid], amount, reason or "Reward")
+end
+
+local function setMoney(player, value)
+	if not player then return end
+	playerMoney[player.UserId] = value or 0
+	MoneyEvent:FireClient(player, playerMoney[player.UserId], 0, "Sync")
+end
+
+local function getInventory(player)
+	if not player then
+		return nil
+	end
+	local uid = player.UserId
+	local inventory = playerInventories[uid]
+	if not inventory then
+		inventory = {
+			slots = {nil, nil, nil},
+			equippedSlot = 1,
+		}
+		playerInventories[uid] = inventory
+	end
+	return inventory
+end
+
+local function getEquippedItemType(player)
+	local inventory = getInventory(player)
+	if not inventory then
+		return nil
+	end
+	return inventory.slots[inventory.equippedSlot]
+end
+
+local function sendInventoryState(player)
+	local inventory = getInventory(player)
+	if not inventory then
+		HeldItemStateEvent:FireClient(player, nil)
+		return
+	end
+	HeldItemStateEvent:FireClient(player, {
+		equipped = inventory.slots[inventory.equippedSlot],
+		slots = {inventory.slots[1], inventory.slots[2], inventory.slots[3]},
+		equippedSlot = inventory.equippedSlot,
+	})
+end
+
+local function getMoney(player)
+	if not player then return 0 end
+	return playerMoney[player.UserId] or 0
+end
+
+local function trySpendMoney(player, amount, reason)
+	if not player then
+		return false
+	end
+	if amount <= 0 then
+		return true
+	end
+	local current = getMoney(player)
+	if current < amount then
+		return false
+	end
+	playerMoney[player.UserId] = current - amount
+	MoneyEvent:FireClient(player, playerMoney[player.UserId], -amount, reason or "Spend")
+	return true
+end
+
+local function tagEnemyLastHit(enemy, player)
+	if not enemy or not player then
+		return
+	end
+	enemy:SetAttribute("LastHitPlayerUserId", player.UserId)
+end
+
 ------------------------------------------------------------
 -- ENEMY SPAWNING & AI
 ------------------------------------------------------------
@@ -121,12 +236,11 @@ local function getRandomGroundItemPos()
 	return Vector3.new(x, 2, z)
 end
 
-local function createGroundItem(itemType)
+local function createItemPart(itemType)
 	local item = Instance.new("Part")
 	item.Name = itemType .. "Item"
 	item.Anchored = true
 	item.CanCollide = true
-	item.Position = getRandomGroundItemPos()
 	item:SetAttribute("ItemType", itemType)
 	item:SetAttribute("IsGroundItem", true)
 
@@ -135,16 +249,92 @@ local function createGroundItem(itemType)
 		item.Shape = Enum.PartType.Ball
 		item.BrickColor = BrickColor.new("Lime green")
 		item.Material = Enum.Material.Neon
-	elseif itemType == "Weapon" then
+	elseif itemType == "Weapon" or itemType == "Sword" then
 		item.Size = Vector3.new(1, 3, 1)
-		item.BrickColor = BrickColor.new("Really black")
+		item.BrickColor = itemType == "Sword" and BrickColor.new("Institutional white") or BrickColor.new("Really black")
 		item.Material = Enum.Material.Metal
+	elseif itemType == "Pistol" then
+		item.Size = Vector3.new(0.34, 0.56, 1.18)
+		item.BrickColor = BrickColor.new("Black")
+		item.Material = Enum.Material.Metal
+		item.Color = Color3.fromRGB(35, 35, 38)
+
+		local slide = Instance.new("Part")
+		slide.Name = "Slide"
+		slide.Size = Vector3.new(0.3, 0.18, 0.72)
+		slide.Color = Color3.fromRGB(90, 90, 96)
+		slide.Material = Enum.Material.Metal
+		slide.Anchored = false
+		slide.CanCollide = false
+		slide.Massless = true
+		slide.CFrame = item.CFrame * CFrame.new(0, 0.16, -0.06)
+		slide.Parent = item
+
+		local slideWeld = Instance.new("WeldConstraint")
+		slideWeld.Part0 = item
+		slideWeld.Part1 = slide
+		slideWeld.Parent = slide
+
+		local handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.Size = Vector3.new(0.26, 0.72, 0.26)
+		handle.Color = Color3.fromRGB(62, 42, 30)
+		handle.Material = Enum.Material.SmoothPlastic
+		handle.Anchored = false
+		handle.CanCollide = false
+		handle.Massless = true
+		handle.CFrame = item.CFrame * CFrame.new(0, -0.48, 0.24) * CFrame.Angles(math.rad(-18), 0, 0)
+		handle.Parent = item
+
+		local handleWeld = Instance.new("WeldConstraint")
+		handleWeld.Part0 = item
+		handleWeld.Part1 = handle
+		handleWeld.Parent = handle
+
+		local barrel = Instance.new("Part")
+		barrel.Name = "Barrel"
+		barrel.Size = Vector3.new(0.14, 0.14, 0.34)
+		barrel.Color = Color3.fromRGB(120, 120, 125)
+		barrel.Material = Enum.Material.Metal
+		barrel.Anchored = false
+		barrel.CanCollide = false
+		barrel.Massless = true
+		barrel.CFrame = item.CFrame * CFrame.new(0, 0, -0.74)
+		barrel.Parent = item
+
+		local barrelWeld = Instance.new("WeldConstraint")
+		barrelWeld.Part0 = item
+		barrelWeld.Part1 = barrel
+		barrelWeld.Parent = barrel
+
+		local muzzle = Instance.new("Attachment")
+		muzzle.Name = "Muzzle"
+		muzzle.Position = Vector3.new(0, 0.02, -0.78)
+		muzzle.Parent = item
 	else
 		item.Size = Vector3.new(2.5, 2.5, 2.5)
 		item.Shape = Enum.PartType.Ball
 		item.BrickColor = BrickColor.new("Dark stone grey")
 		item.Material = Enum.Material.Slate
 	end
+
+	return item
+end
+
+local function getHeldGripOffset(itemType, attachPart)
+	local partName = attachPart and attachPart.Name or ""
+	if itemType == "Pistol" then
+		if partName == "RightHand" then
+			return CFrame.new(-0.02, -0.04, -0.64) * CFrame.Angles(math.rad(-96), math.rad(-10), math.rad(-8))
+		end
+		return CFrame.new(-0.06, -0.92, -0.44) * CFrame.Angles(math.rad(-96), math.rad(-10), math.rad(-8))
+	end
+	return CFrame.new(0, -0.8, -1)
+end
+
+local function createGroundItem(itemType)
+	local item = createItemPart(itemType)
+	item.Position = getRandomGroundItemPos()
 
 	local label = Instance.new("BillboardGui")
 	label.Name = "ItemLabel"
@@ -171,8 +361,10 @@ local function pickRandomItemType()
 	local roll = math.random()
 	if roll < 0.35 then
 		return "Health"
-	elseif roll < 0.65 then
+	elseif roll < 0.52 then
 		return "Weapon"
+	elseif roll < 0.72 then
+		return "Sword"
 	end
 	return "Rock"
 end
@@ -219,21 +411,107 @@ local function clearHeldItem(player)
 	end
 	heldItems[player.UserId] = nil
 	itemUseCooldowns[player.UserId] = nil
-	HeldItemStateEvent:FireClient(player, nil)
+end
+
+local function refreshEquippedVisual(player)
+	if not player or not player.Character then
+		return false
+	end
+
+	clearHeldItem(player)
+
+	local itemType = getEquippedItemType(player)
+	if not itemType then
+		sendInventoryState(player)
+		return true
+	end
+
+	local attachPart = player.Character:FindFirstChild("RightHand")
+		or player.Character:FindFirstChild("Right Arm")
+		or player.Character:FindFirstChild("HumanoidRootPart")
+	if not attachPart then
+		sendInventoryState(player)
+		return false
+	end
+
+	local itemPart = createItemPart(itemType)
+	itemPart.Anchored = false
+	itemPart.CanCollide = false
+	itemPart.Massless = true
+	itemPart.CFrame = attachPart.CFrame * getHeldGripOffset(itemType, attachPart)
+	itemPart.Parent = player.Character
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = attachPart
+	weld.Part1 = itemPart
+	weld.Parent = itemPart
+
+	heldItems[player.UserId] = {
+		Type = itemType,
+		Part = itemPart,
+	}
+	sendInventoryState(player)
+	return true
+end
+
+local function setEquippedSlot(player, slotIndex)
+	local inventory = getInventory(player)
+	if not inventory then
+		return false
+	end
+	if typeof(slotIndex) ~= "number" or slotIndex < 1 or slotIndex > 3 then
+		return false
+	end
+	inventory.equippedSlot = slotIndex
+	refreshEquippedVisual(player)
+	return true
+end
+
+local function addInventoryItem(player, itemType)
+	local inventory = getInventory(player)
+	if not inventory then
+		return false
+	end
+
+	local emptySlot = nil
+	for i = 1, 3 do
+		if inventory.slots[i] == nil then
+			emptySlot = i
+			break
+		end
+	end
+	if not emptySlot then
+		sendInventoryState(player)
+		return false
+	end
+
+	inventory.slots[emptySlot] = itemType
+	if not inventory.slots[inventory.equippedSlot] then
+		inventory.equippedSlot = emptySlot
+	end
+	refreshEquippedVisual(player)
+	return true
 end
 
 local function dropHeldItem(player, dropDirection)
+	local inventory = getInventory(player)
+	if not inventory then
+		return
+	end
+
+	local equippedSlot = inventory.equippedSlot
+	local equippedType = inventory.slots[equippedSlot]
 	local held = heldItems[player.UserId]
 	if not held or not held.Part or not held.Part.Parent then
-		heldItems[player.UserId] = nil
-		HeldItemStateEvent:FireClient(player, nil)
+		inventory.slots[equippedSlot] = nil
+		refreshEquippedVisual(player)
 		return
 	end
 
 	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
 		held.Part:Destroy()
-		heldItems[player.UserId] = nil
-		HeldItemStateEvent:FireClient(player, nil)
+		inventory.slots[equippedSlot] = nil
+		refreshEquippedVisual(player)
 		return
 	end
 
@@ -251,12 +529,13 @@ local function dropHeldItem(player, dropDirection)
 	held.Part.Massless = false
 	held.Part.Position = hrp.Position + dir * 3 + Vector3.new(0, 1, 0)
 	held.Part.Parent = groundItemsFolder
-	held.Part:SetAttribute("ItemType", held.Type)
+	held.Part:SetAttribute("ItemType", equippedType or held.Type)
 	held.Part:SetAttribute("IsGroundItem", true)
 
-	heldItems[player.UserId] = nil
+	clearHeldItem(player)
+	inventory.slots[equippedSlot] = nil
 	itemUseCooldowns[player.UserId] = nil
-	HeldItemStateEvent:FireClient(player, nil)
+	refreshEquippedVisual(player)
 end
 
 local function clearEnemyHeldItem(enemy)
@@ -307,7 +586,7 @@ local function enemyTryPickupItem(enemy, enemyHumanoid)
 	nearestItem.Anchored = false
 	nearestItem.CanCollide = false
 	nearestItem.Massless = true
-	nearestItem.CFrame = attachPart.CFrame * CFrame.new(0, -0.8, -1)
+	nearestItem.CFrame = attachPart.CFrame * getHeldGripOffset(itemType, attachPart)
 	nearestItem.Parent = enemy
 
 	local weld = Instance.new("WeldConstraint")
@@ -619,6 +898,11 @@ local function doSuplex(player, enemy, facing)
 
 			if enemyHumanoid.Health > 0 then
 				enemyHumanoid:TakeDamage(slamDamage)
+				tagEnemyLastHit(enemy, player)
+				local hitReward = getMoneyConfig().HitReward or 0
+				if hitReward > 0 then
+					awardMoney(player, hitReward, "Hit")
+				end
 				updateEnemyHealthBar(enemy, enemyHumanoid)
 				applyEnemyKnockback(enemy, -forward * slamKnockback, 5, 0.25)
 				ComicBubbleEvent:FireAllClients(enemy, "heavy", enemy.PrimaryPart.Position)
@@ -649,6 +933,11 @@ local function tryMeleeItemSwing(player, damage, range, knockbackForce)
 			local toEnemy = (enemy.PrimaryPart.Position - charPos).Unit
 			if toEnemy:Dot(facing) > 0.1 then
 				enemyHumanoid:TakeDamage(damage)
+				tagEnemyLastHit(enemy, player)
+				local hitReward = getMoneyConfig().HitReward or 0
+				if hitReward > 0 then
+					awardMoney(player, hitReward, "Hit")
+				end
 				updateEnemyHealthBar(enemy, enemyHumanoid)
 				applyEnemyKnockback(enemy, toEnemy * knockbackForce, 8, 0.2)
 				EnemyHitEvent:FireAllClients(enemy, "hit", charPos, "ItemSwing")
@@ -659,6 +948,130 @@ local function tryMeleeItemSwing(player, damage, range, knockbackForce)
 	end
 
 	return hitSomething
+end
+
+local function emitPistolMuzzleEffects(heldPart)
+	if not heldPart or not heldPart.Parent then
+		return
+	end
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "MuzzleSmoke"
+	smoke.Texture = "rbxasset://textures/particles/smoke_main.dds"
+	smoke.Lifetime = NumberRange.new(0.15, 0.28)
+	smoke.Speed = NumberRange.new(3, 6)
+	smoke.Rate = 0
+	smoke.SpreadAngle = Vector2.new(8, 8)
+	smoke.RotSpeed = NumberRange.new(-60, 60)
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.25),
+		NumberSequenceKeypoint.new(1, 0.8),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	smoke.Color = ColorSequence.new(Color3.fromRGB(210, 210, 210), Color3.fromRGB(120, 120, 120))
+	smoke.Parent = heldPart
+	smoke:Emit(7)
+	Debris:AddItem(smoke, 0.35)
+
+	local flash = Instance.new("PointLight")
+	flash.Color = Color3.fromRGB(255, 210, 140)
+	flash.Range = 8
+	flash.Brightness = 2.2
+	flash.Parent = heldPart
+	Debris:AddItem(flash, 0.06)
+end
+
+local function createShotTracer(origin, targetPos)
+	local distance = (targetPos - origin).Magnitude
+	if distance <= 0.05 then
+		return
+	end
+	local tracer = Instance.new("Part")
+	tracer.Name = "PistolTracer"
+	tracer.Anchored = true
+	tracer.CanCollide = false
+	tracer.CastShadow = false
+	tracer.Material = Enum.Material.Neon
+	tracer.Color = Color3.fromRGB(255, 235, 160)
+	tracer.Transparency = 0.2
+	tracer.Size = Vector3.new(0.08, 0.08, distance)
+	tracer.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -distance * 0.5)
+	tracer.Parent = workspace
+	Debris:AddItem(tracer, 0.05)
+end
+
+local function fireHitscanPistol(player, aimDirection, pistolConfig)
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+		return
+	end
+
+	local character = player.Character
+	local hrp = character.HumanoidRootPart
+	local head = character:FindFirstChild("Head")
+	local held = heldItems[player.UserId]
+	local dir = (aimDirection and aimDirection.Magnitude > 0) and aimDirection.Unit or hrp.CFrame.LookVector
+	local maxRange = pistolConfig.MaxRange or 140
+	local aimOrigin = head and head.Position or (hrp.Position + Vector3.new(0, 1.5, 0))
+
+	local centerParams = RaycastParams.new()
+	centerParams.FilterType = Enum.RaycastFilterType.Exclude
+	centerParams.FilterDescendantsInstances = {character}
+	centerParams.IgnoreWater = true
+
+	local centerResult = workspace:Raycast(aimOrigin, dir * maxRange, centerParams)
+	local targetPos = centerResult and centerResult.Position or (aimOrigin + dir * maxRange)
+
+	local muzzlePos = aimOrigin + dir * 0.8
+	if held and held.Part and held.Part.Parent then
+		local muzzle = held.Part:FindFirstChild("Muzzle")
+		if muzzle and muzzle:IsA("Attachment") then
+			muzzlePos = muzzle.WorldPosition
+		end
+		emitPistolMuzzleEffects(held.Part)
+	end
+
+	local muzzleDir = targetPos - muzzlePos
+	if muzzleDir.Magnitude < 0.05 then
+		muzzleDir = dir
+	else
+		muzzleDir = muzzleDir.Unit
+	end
+
+	local shotParams = RaycastParams.new()
+	shotParams.FilterType = Enum.RaycastFilterType.Exclude
+	shotParams.FilterDescendantsInstances = {character}
+	shotParams.IgnoreWater = true
+
+	local shotDistance = math.min(maxRange, (targetPos - muzzlePos).Magnitude + 1)
+	local shotResult = workspace:Raycast(muzzlePos, muzzleDir * shotDistance, shotParams)
+	local visualEnd = shotResult and shotResult.Position or (muzzlePos + muzzleDir * shotDistance)
+	createShotTracer(muzzlePos, visualEnd)
+
+	if not shotResult then
+		return
+	end
+
+	local enemy = shotResult.Instance and shotResult.Instance:FindFirstAncestorOfClass("Model")
+	if not enemy or enemy.Parent ~= enemiesFolder then
+		return
+	end
+	local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+	if not enemyHumanoid or enemyHumanoid.Health <= 0 then
+		return
+	end
+
+	enemyHumanoid:TakeDamage(pistolConfig.ShotDamage or 15)
+	tagEnemyLastHit(enemy, player)
+	local hitReward = getMoneyConfig().HitReward or 0
+	if hitReward > 0 then
+		awardMoney(player, hitReward, "Hit")
+	end
+	totalScore = totalScore + CombatConfig.ScorePerHit
+	ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
+	updateEnemyHealthBar(enemy, enemyHumanoid)
+	EnemyHitEvent:FireAllClients(enemy, "hit", shotResult.Position, "PistolShot")
 end
 
 local function throwRock(player, rockPart, throwDirection, throwConfig, attackTag)
@@ -706,6 +1119,11 @@ local function throwRock(player, rockPart, throwDirection, throwConfig, attackTa
 
 		hitDone = true
 		enemyHumanoid:TakeDamage(throwConfig.ThrowDamage)
+		tagEnemyLastHit(enemy, player)
+		local hitReward = getMoneyConfig().HitReward or 0
+		if hitReward > 0 then
+			awardMoney(player, hitReward, "Hit")
+		end
 		updateEnemyHealthBar(enemy, enemyHumanoid)
 		totalScore = totalScore + CombatConfig.ScorePerHit
 		ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
@@ -782,6 +1200,35 @@ local function countNearbyEnemies(position, radius, excludedEnemy)
 	return count
 end
 
+local function stabilizeEnemyInArena(enemy, humanoid)
+	if not enemy or not enemy.PrimaryPart or not humanoid then
+		return
+	end
+
+	local root = enemy.PrimaryPart
+	local currentPos = root.Position
+	local clampedPos = ArenaBuilder.ClampToPlayableArea(currentPos, currentSelectedLevel)
+	local outOfBounds = math.abs(clampedPos.X - currentPos.X) > 0.01 or math.abs(clampedPos.Z - currentPos.Z) > 0.01
+	local tooHigh = currentPos.Y > 30
+	local tooLow = currentPos.Y < -20
+	local needsRecovery = outOfBounds or tooHigh or tooLow
+
+	if needsRecovery then
+		local safePos = Vector3.new(clampedPos.X, 3, clampedPos.Z)
+		enemy:PivotTo(CFrame.new(safePos))
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		humanoid:ChangeState(Enum.HumanoidStateType.Running)
+		return
+	end
+
+	-- Prevent random extreme launches from stacking impulses.
+	local v = root.AssemblyLinearVelocity
+	if v.Y > 35 then
+		root.AssemblyLinearVelocity = Vector3.new(v.X, 20, v.Z)
+	end
+end
+
 local function spawnEnemy(typeName, waveNum)
 	local enemyDef = EnemyTypes.Types[typeName]
 	if not enemyDef then return end
@@ -798,7 +1245,16 @@ local function spawnEnemy(typeName, waveNum)
 		typeName
 	)
 
+	local safeSpawnPos = ArenaBuilder.ClampToPlayableArea(spawnPos, currentSelectedLevel)
+	model:PivotTo(CFrame.new(safeSpawnPos))
+
 	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+		warn(("[GameManager] Enemy '%s' spawned as %s, expected R15"):format(
+			enemyDef.Name,
+			tostring(humanoid.RigType)
+		))
+	end
 	local maxHP = math.max(1, math.floor(enemyDef.Health * healthMult * difficulty.HealthMultiplier))
 	humanoid.MaxHealth = maxHP
 	humanoid.Health = maxHP
@@ -893,6 +1349,15 @@ local function spawnEnemy(typeName, waveNum)
 		if esm then esm:Kill() end
 		clearEnemyHeldItem(model)
 		enemiesAlive = enemiesAlive - 1
+
+		local killerUserId = model:GetAttribute("LastHitPlayerUserId")
+		if killerUserId then
+			local killerPlayer = Players:GetPlayerByUserId(killerUserId)
+			local killReward = getMoneyConfig().KillReward or 25
+			if killerPlayer and killReward > 0 then
+				awardMoney(killerPlayer, killReward, "Kill")
+			end
+		end
 
 		-- Award score
 		local scoreValue = enemyDef.ScoreValue
@@ -991,10 +1456,16 @@ local function doEnemyComboHit(enemy, enemyDef, data, target, hitIndex)
 	if isBlocking then
 		dmg = math.floor(dmg * (1 - CombatConfig.BlockDamageReduction))
 	end
+	local hitPlayer = Players:GetPlayerFromCharacter(target)
+	local shieldLeft = hitPlayer and (playerShield[hitPlayer.UserId] or 0) or 0
+	if hitPlayer and shieldLeft > 0 then
+		local absorbed = math.min(shieldLeft, dmg)
+		playerShield[hitPlayer.UserId] = shieldLeft - absorbed
+		dmg = math.max(0, dmg - absorbed)
+	end
 	targetHumanoid:TakeDamage(dmg)
 
 	-- Notify hit player
-	local hitPlayer = Players:GetPlayerFromCharacter(target)
 	if hitPlayer then
 		DamageEvent:FireClient(hitPlayer, dmg, isBlocking, enemy.PrimaryPart.Position)
 		if dmgMult >= 1.3 then
@@ -1017,6 +1488,8 @@ local function runEnemyAI()
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
 				local data = enemy:FindFirstChild("EnemyData")
 				if humanoid and humanoid.Health > 0 and data then
+					stabilizeEnemyInArena(enemy, humanoid)
+
 					-- Skip if enemies are frozen
 					if enemiesFrozen then
 						continue
@@ -1208,6 +1681,7 @@ local function cleanupGame()
 	currentWave = 0
 	totalScore = 0
 	playerScores = {}
+	playerMoney = {}
 	playerDeaths = {}
 	activeTeam = {}
 end
@@ -1260,6 +1734,7 @@ local function startGame(levelKey, difficultyKey)
 		activeTeam[player.UserId] = true
 	end
 	for index, player in ipairs(getActiveTeamPlayers()) do
+		setMoney(player, 0)
 		player:LoadCharacter()
 		playerDeaths[player.UserId] = false
 		local character = player.Character or player.CharacterAdded:Wait()
@@ -1326,6 +1801,11 @@ AttackEvent.OnServerEvent:Connect(function(player, attackType, targetPosition, a
 			if dot > 0.2 then
 				local dmg = config.Damage
 				enemyHumanoid:TakeDamage(dmg)
+				tagEnemyLastHit(enemy, player)
+				local hitReward = getMoneyConfig().HitReward or 0
+				if hitReward > 0 then
+					awardMoney(player, hitReward, "Hit")
+				end
 				hitSomething = true
 
 				-- Set HitStun state on enemy
@@ -1416,7 +1896,6 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 	if not humanoid or humanoid.Health <= 0 then return end
 
 	if action == "Pickup" then
-		if heldItems[player.UserId] then return end
 		local nearestItem = findNearestGroundItem(player.Character.HumanoidRootPart.Position, CombatConfig.Items.PickupRange)
 		if not nearestItem then return end
 
@@ -1424,35 +1903,16 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 		if itemType == "Health" then
 			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + CombatConfig.Items.Health.HealAmount)
 			nearestItem:Destroy()
-			HeldItemStateEvent:FireClient(player, nil)
+			sendInventoryState(player)
 			return
 		end
-
-		local attachPart = player.Character:FindFirstChild("RightHand")
-			or player.Character:FindFirstChild("Right Arm")
-			or player.Character:FindFirstChild("HumanoidRootPart")
-		if not attachPart then return end
-
-		nearestItem.Anchored = false
-		nearestItem.CanCollide = false
-		nearestItem.Massless = true
-		nearestItem.CFrame = attachPart.CFrame * CFrame.new(0, -0.8, -1)
-		nearestItem.Parent = player.Character
-
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = attachPart
-		weld.Part1 = nearestItem
-		weld.Parent = nearestItem
-
-		heldItems[player.UserId] = {
-			Type = itemType,
-			Part = nearestItem,
-		}
-		HeldItemStateEvent:FireClient(player, itemType)
+		if addInventoryItem(player, itemType) then
+			nearestItem:Destroy()
+		end
 	elseif action == "Use" then
 		local held = heldItems[player.UserId]
 		if not held or not held.Part or not held.Part.Parent then
-			clearHeldItem(player)
+			refreshEquippedVisual(player)
 			return
 		end
 
@@ -1461,6 +1921,10 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 		local useCooldown = CombatConfig.Items.Weapon.SwingCooldown
 		if held.Type == "Rock" then
 			useCooldown = CombatConfig.Items.Rock.ThrowCooldown
+		elseif held.Type == "Sword" then
+			useCooldown = CombatConfig.Items.Sword.SwingCooldown
+		elseif held.Type == "Pistol" then
+			useCooldown = CombatConfig.Items.Pistol.ShotCooldown
 		end
 		if now - lastUsed < useCooldown then
 			return
@@ -1478,9 +1942,24 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 				totalScore = totalScore + CombatConfig.ScorePerHit
 				ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
 			end
+		elseif held.Type == "Sword" then
+			local didHit = tryMeleeItemSwing(
+				player,
+				CombatConfig.Items.Sword.SwingDamage,
+				CombatConfig.Items.Sword.SwingRange,
+				CombatConfig.Items.Sword.KnockbackForce
+			)
+			if didHit then
+				totalScore = totalScore + CombatConfig.ScorePerHit
+				ScoreEvent:FireAllClients("hit", CombatConfig.ScorePerHit, totalScore)
+			end
+		elseif held.Type == "Pistol" then
+			fireHitscanPistol(player, direction, CombatConfig.Items.Pistol)
 		elseif held.Type == "Rock" then
-			heldItems[player.UserId] = nil
-			HeldItemStateEvent:FireClient(player, nil)
+			local inventory = getInventory(player)
+			inventory.slots[inventory.equippedSlot] = nil
+			clearHeldItem(player)
+			sendInventoryState(player)
 			throwRock(player, held.Part, direction)
 		end
 	elseif action == "Drop" then
@@ -1488,7 +1967,7 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 	elseif action == "Throw" then
 		local held = heldItems[player.UserId]
 		if not held or not held.Part or not held.Part.Parent then
-			clearHeldItem(player)
+			refreshEquippedVisual(player)
 			return
 		end
 
@@ -1497,29 +1976,127 @@ ItemInteractEvent.OnServerEvent:Connect(function(player, action, direction)
 		local throwCooldown = CombatConfig.Items.Rock.ThrowCooldown
 		if held.Type == "Weapon" then
 			throwCooldown = CombatConfig.Items.Weapon.ThrowCooldown
+		elseif held.Type == "Sword" then
+			throwCooldown = CombatConfig.Items.Sword.ThrowCooldown
+		elseif held.Type == "Pistol" then
+			throwCooldown = CombatConfig.Items.Pistol.ShotCooldown
 		end
 		if now - lastUsed < throwCooldown then
 			return
 		end
 		itemUseCooldowns[player.UserId] = now
 
-		heldItems[player.UserId] = nil
-		HeldItemStateEvent:FireClient(player, nil)
+		local inventory = getInventory(player)
+		inventory.slots[inventory.equippedSlot] = nil
+		clearHeldItem(player)
+		sendInventoryState(player)
 		if held.Type == "Weapon" then
 			throwRock(player, held.Part, direction, CombatConfig.Items.Weapon, "WeaponThrow")
+		elseif held.Type == "Sword" then
+			throwRock(player, held.Part, direction, CombatConfig.Items.Sword, "SwordThrow")
+		elseif held.Type == "Pistol" then
+			throwRock(player, held.Part, direction, CombatConfig.Items.Weapon, "PistolThrow")
 		else
 			throwRock(player, held.Part, direction, CombatConfig.Items.Rock, "RockThrow")
 		end
+	elseif action == "EquipSlot" then
+		setEquippedSlot(player, tonumber(direction))
 	end
+end)
+
+ShopPurchaseEvent.OnServerEvent:Connect(function(player, itemKey)
+	if gameState ~= "Playing" then
+		ShopResultEvent:FireClient(player, false, "Shop is only available during a match.")
+		return
+	end
+	if not activeTeam[player.UserId] then
+		ShopResultEvent:FireClient(player, false, "You are not on the active team.")
+		return
+	end
+	if not player.Character then
+		ShopResultEvent:FireClient(player, false, "Character not ready.")
+		return
+	end
+
+	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		ShopResultEvent:FireClient(player, false, "You cannot shop while downed.")
+		return
+	end
+
+	local shopConfig = CombatConfig.Shop or {}
+	local cost = shopConfig[itemKey]
+	if not cost then
+		ShopResultEvent:FireClient(player, false, "Unknown item.")
+		return
+	end
+
+	if not trySpendMoney(player, cost, "Shop") then
+		ShopResultEvent:FireClient(player, false, "Not enough money.")
+		return
+	end
+
+	if itemKey == "HealthPack" then
+		local healAmount = CombatConfig.Items.Health.HealAmount
+		local before = humanoid.Health
+		humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + healAmount)
+		if humanoid.Health <= before then
+			awardMoney(player, cost, "Refund")
+			ShopResultEvent:FireClient(player, false, "Health is already full.")
+			return
+		end
+		ShopResultEvent:FireClient(player, true, "Purchased Health Pack.")
+		return
+	end
+
+	if itemKey == "Shield" then
+		local shieldConfig = CombatConfig.Items.Shield or {}
+		local maxAbsorb = shieldConfig.MaxAbsorb or 75
+		local absorbAmount = shieldConfig.AbsorbAmount or 35
+		playerShield[player.UserId] = math.min(maxAbsorb, (playerShield[player.UserId] or 0) + absorbAmount)
+		ShopResultEvent:FireClient(player, true, "Purchased Shield.")
+		return
+	end
+
+	if itemKey == "StaminaPotion" then
+		StaminaBoostEvent:FireClient(player, CombatConfig.Items.StaminaPotion and CombatConfig.Items.StaminaPotion.RestoreAmount or 45)
+		ShopResultEvent:FireClient(player, true, "Purchased Stamina Potion.")
+		return
+	end
+
+	if itemKey == "Weapon" or itemKey == "Rock" or itemKey == "Sword" or itemKey == "Pistol" then
+		if addInventoryItem(player, itemKey) then
+			ShopResultEvent:FireClient(player, true, "Purchased " .. itemKey .. ".")
+		else
+			awardMoney(player, cost, "Refund")
+			ShopResultEvent:FireClient(player, false, "Inventory full.")
+		end
+		return
+	end
+
+	awardMoney(player, cost, "Refund")
+	ShopResultEvent:FireClient(player, false, "Purchase failed.")
 end)
 
 ------------------------------------------------------------
 -- PLAYER DEATH TRACKING
 ------------------------------------------------------------
 Players.PlayerAdded:Connect(function(player)
+	setMoney(player, playerMoney[player.UserId] or 0)
+	playerShield[player.UserId] = 0
+	playerInventories[player.UserId] = {
+		slots = {nil, nil, nil},
+		equippedSlot = 1,
+	}
 	refreshLobbyTeamStatus()
 	player.CharacterAdded:Connect(function(character)
 		clearHeldItem(player)
+		playerShield[player.UserId] = 0
+		playerInventories[player.UserId] = {
+			slots = {nil, nil, nil},
+			equippedSlot = 1,
+		}
+		sendInventoryState(player)
 
 		local blockVal = Instance.new("BoolValue")
 		blockVal.Name = "IsBlocking"
@@ -1532,6 +2109,12 @@ Players.PlayerAdded:Connect(function(player)
 		dodgeVal.Parent = character
 
 		local humanoid = character:WaitForChild("Humanoid")
+		if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+			warn(("[GameManager] Player '%s' spawned as %s, expected R15"):format(
+				player.Name,
+				tostring(humanoid.RigType)
+			))
+		end
 		humanoid.WalkSpeed = CombatConfig.PlayerWalkSpeed
 		humanoid.JumpPower = CombatConfig.PlayerJumpPower
 		humanoid.Died:Connect(function()
@@ -1551,8 +2134,11 @@ Players.PlayerRemoving:Connect(function(player)
 	clearHeldItem(player)
 	activeTeam[player.UserId] = nil
 	heldItems[player.UserId] = nil
+	playerInventories[player.UserId] = nil
+	playerShield[player.UserId] = nil
 	itemUseCooldowns[player.UserId] = nil
 	grabUseCooldowns[player.UserId] = nil
+	playerMoney[player.UserId] = nil
 	refreshLobbyTeamStatus()
 	if gameState == "Playing" and checkAllPlayersDead() then
 		endGame()

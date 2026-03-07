@@ -79,28 +79,22 @@ CharacterStates.Enemy = {
 CharacterStates.Player = {
 	Idle = {
 		enter = function(model, prevState, sm)
-			AnimationManager.PlayPlayerLocomotion(model, false, false)
 		end,
 		update = function(model, dt, sm)
-			AnimationManager.PlayPlayerLocomotion(model, false, false)
 		end,
 	},
 
 	Walking = {
 		enter = function(model, prevState, sm)
-			AnimationManager.PlayPlayerLocomotion(model, true, false)
 		end,
 		update = function(model, dt, sm)
-			AnimationManager.PlayPlayerLocomotion(model, true, false)
 		end,
 	},
 
 	Sprinting = {
 		enter = function(model, prevState, sm)
-			AnimationManager.PlayPlayerLocomotion(model, true, true)
 		end,
 		update = function(model, dt, sm)
-			AnimationManager.PlayPlayerLocomotion(model, true, true)
 		end,
 	},
 

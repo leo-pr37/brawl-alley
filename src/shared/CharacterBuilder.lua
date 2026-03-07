@@ -7,6 +7,14 @@
 
 local CharacterBuilder = {}
 
+local function createRigAttachment(part, name, cf)
+	local attachment = Instance.new("Attachment")
+	attachment.Name = name
+	attachment.CFrame = cf
+	attachment.Parent = part
+	return attachment
+end
+
 ------------------------------------------------------------
 -- R15 PART DEFINITIONS  {name, size, offset_from_HRP}
 ------------------------------------------------------------
@@ -120,6 +128,10 @@ function CharacterBuilder.Build(name, position, color, scaleMultiplier)
 	-- Create Motor6D joints
 	for _, def in ipairs(scaledJoints(s)) do
 		local jointName, p0Name, p1Name, c0, c1 = def[1], def[2], def[3], def[4], def[5]
+		local attachmentName = jointName .. "RigAttachment"
+		createRigAttachment(parts[p0Name], attachmentName, c0)
+		createRigAttachment(parts[p1Name], attachmentName, c1)
+
 		local motor = Instance.new("Motor6D")
 		motor.Name = jointName
 		motor.Part0 = parts[p0Name]
@@ -138,6 +150,9 @@ function CharacterBuilder.Build(name, position, color, scaleMultiplier)
 	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Subject
 	humanoid.HealthDisplayDistance = 50
 	humanoid.NameDisplayDistance = 50
+	pcall(function()
+		humanoid.RigType = Enum.HumanoidRigType.R15
+	end)
 	humanoid.Parent = model
 
 	model.PrimaryPart = parts["HumanoidRootPart"]

@@ -18,38 +18,80 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CombatConfig = require(Shared:WaitForChild("CombatConfig"))
 local AnimationManager = require(Shared:WaitForChild("AnimationManager"))
 local ComicBubbles = require(Shared:WaitForChild("ComicBubbles"))
-local StateMachine = require(Shared:WaitForChild("StateMachine"))
+local StateMachine = require(Shared:WaitForChild("RuntimeStateMachine"))
 local CharacterStates = require(Shared:WaitForChild("CharacterStates"))
 
 -- Remote events
-local AttackEvent = ReplicatedStorage:WaitForChild("AttackEvent")
-local BlockEvent = ReplicatedStorage:WaitForChild("BlockEvent")
-local DodgeEvent = ReplicatedStorage:WaitForChild("DodgeEvent")
-local GrabEvent = ReplicatedStorage:WaitForChild("GrabEvent")
-local ComicBubbleEvent = ReplicatedStorage:WaitForChild("ComicBubbleEvent", 10)
-local ItemInteractEvent = ReplicatedStorage:WaitForChild("ItemInteractEvent")
-local HeldItemStateEvent = ReplicatedStorage:WaitForChild("HeldItemStateEvent")
-local EnemyHitEvent = ReplicatedStorage:WaitForChild("EnemyHitEvent")
+local Remotes = Shared:WaitForChild("Remotes", 10)
+if not Remotes then
+	error("[CombatController] Shared.Remotes not found")
+end
+
+local function getRemote(name)
+	local remote = Remotes:FindFirstChild(name) or Remotes:WaitForChild(name, 10)
+	if not remote then
+		remote = ReplicatedStorage:FindFirstChild(name) or ReplicatedStorage:WaitForChild(name, 2)
+	end
+	if not remote then
+		error(("[CombatController] Remote not found: %s"):format(name))
+	end
+	return remote
+end
+
+local AttackEvent = getRemote("AttackEvent")
+local BlockEvent = getRemote("BlockEvent")
+local DodgeEvent = getRemote("DodgeEvent")
+local GrabEvent = getRemote("GrabEvent")
+local ComicBubbleEvent = getRemote("ComicBubbleEvent")
+local ItemInteractEvent = getRemote("ItemInteractEvent")
+local HeldItemStateEvent = getRemote("HeldItemStateEvent")
+local EnemyHitEvent = getRemote("EnemyHitEvent")
+local StaminaBoostEvent = getRemote("StaminaBoost")
 
 -- Combat state
 local comboCount = 0
 local lastAttackTime = 0
 local lastDodgeTime = 0
+local lastUppercutJumpTime = 0
 local isBlocking = false
 local mouseHoldStart = 0
 local isHolding = false
 local attackCooldownEnd = 0
 local lastGrabTime = 0
 local heldItemType = nil
+local inventorySlots = {nil, nil, nil}
+local equippedSlot = 1
 local lastItemUseTime = 0
 local isSprinting = false
 local playerSM = nil -- StateMachine, created on CharacterAdded
+local blockPoseActive = false
+local pistolPoseActive = false
 
 local BASE_WALK_SPEED = CombatConfig.PlayerWalkSpeed or 20
 local SPRINT_WALK_SPEED = BASE_WALK_SPEED * 1.5
+local UPPERCUT_JUMP_COOLDOWN = 0.35
 local grabConfig = CombatConfig.Grab or {}
+local staminaConfig = CombatConfig.Stamina or {}
+local maxStamina = staminaConfig.Max or 100
+local stamina = maxStamina
+local lastStaminaUseTime = 0
+local savedJumpPower = nil
+local savedJumpHeight = nil
+local blockJumpSuppressed = false
 local audioConfig = CombatConfig.Audio or {}
 local sfxConfig = audioConfig.SFX or {}
+local staminaEvent = ReplicatedStorage:FindFirstChild("StaminaUpdate")
+if not staminaEvent then
+	staminaEvent = Instance.new("BindableEvent")
+	staminaEvent.Name = "StaminaUpdate"
+	staminaEvent.Parent = ReplicatedStorage
+end
+local inventoryEvent = ReplicatedStorage:FindFirstChild("InventoryUpdate")
+if not inventoryEvent then
+	inventoryEvent = Instance.new("BindableEvent")
+	inventoryEvent.Name = "InventoryUpdate"
+	inventoryEvent.Parent = ReplicatedStorage
+end
 
 local function createSfx(name, soundId, volume)
 	if not soundId or soundId == "" then
@@ -109,11 +151,86 @@ local function isAlive()
 	return h and h.Health > 0
 end
 
+local function disableDefaultAnimate(character)
+	-- Keep Roblox default Animate enabled for normal locomotion.
+	if not character then return end
+	local animateScript = character:FindFirstChild("Animate")
+	if animateScript and animateScript:IsA("LocalScript") then
+		animateScript.Disabled = false
+	end
+end
+
+local function setBlockJumpSuppressed(enabled)
+	local humanoid = getHumanoid()
+	if not humanoid then return end
+
+	if enabled then
+		if blockJumpSuppressed then return end
+		blockJumpSuppressed = true
+		savedJumpPower = humanoid.JumpPower
+		savedJumpHeight = humanoid.JumpHeight
+		humanoid.Jump = false
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+		if humanoid.UseJumpPower then
+			humanoid.JumpPower = 0
+		else
+			humanoid.JumpHeight = 0
+		end
+	else
+		if not blockJumpSuppressed then return end
+		blockJumpSuppressed = false
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+		if humanoid.UseJumpPower then
+			humanoid.JumpPower = savedJumpPower or CombatConfig.PlayerJumpPower or 50
+		else
+			humanoid.JumpHeight = savedJumpHeight or 7.2
+		end
+	end
+end
+
 local function setSprint(enabled)
+	if enabled then
+		local minToStartSprint = staminaConfig.MinToStartSprint or 12
+		if stamina < minToStartSprint then
+			enabled = false
+		end
+	end
 	isSprinting = enabled and true or false
 	local humanoid = getHumanoid()
 	if not humanoid or humanoid.Health <= 0 then return end
 	humanoid.WalkSpeed = isSprinting and SPRINT_WALK_SPEED or BASE_WALK_SPEED
+end
+
+local function pushStaminaUpdate()
+	if staminaEvent then
+		staminaEvent:Fire(stamina, maxStamina)
+	end
+end
+
+local function pushInventoryUpdate()
+	if inventoryEvent then
+		inventoryEvent:Fire({
+			slots = {inventorySlots[1], inventorySlots[2], inventorySlots[3]},
+			equippedSlot = equippedSlot,
+			equipped = heldItemType,
+		})
+	end
+end
+
+local function consumeStamina(amount)
+	if amount <= 0 then
+		return true
+	end
+	if stamina < amount then
+		return false
+	end
+	stamina = math.max(0, stamina - amount)
+	lastStaminaUseTime = tick()
+	if stamina <= 0 and isSprinting then
+		setSprint(false)
+	end
+	pushStaminaUpdate()
+	return true
 end
 
 local function getLookDirection()
@@ -122,6 +239,44 @@ local function getLookDirection()
 		return hrp.CFrame.LookVector
 	end
 	return Vector3.new(0, 0, -1)
+end
+
+local function getCameraAimDirection()
+	local cam = workspace.CurrentCamera
+	if cam then
+		return cam.CFrame.LookVector
+	end
+	return getLookDirection()
+end
+
+local function getAutoAimDirection()
+	local hrp = getHumanoidRootPart()
+	if not hrp then
+		return getLookDirection()
+	end
+
+	local enemiesFolder = workspace:FindFirstChild("Enemies")
+	if not enemiesFolder then
+		return getLookDirection()
+	end
+
+	local bestDir = nil
+	local bestDist = math.huge
+	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+		if enemy:IsA("Model") and enemy.PrimaryPart then
+			local enemyHumanoid = enemy:FindFirstChildOfClass("Humanoid")
+			if enemyHumanoid and enemyHumanoid.Health > 0 then
+				local delta = (enemy.PrimaryPart.Position + Vector3.new(0, 1.5, 0)) - hrp.Position
+				local dist = delta.Magnitude
+				if dist > 0.001 and dist < bestDist then
+					bestDist = dist
+					bestDir = delta.Unit
+				end
+			end
+		end
+	end
+
+	return bestDir or getLookDirection()
 end
 
 local function findLocalGrabTarget()
@@ -156,17 +311,23 @@ end
 
 -- Exaggerated uppercut: player jumps up
 local function doUppercutJump()
+	local now = tick()
+	if now - lastUppercutJumpTime < UPPERCUT_JUMP_COOLDOWN then
+		return
+	end
+	lastUppercutJumpTime = now
+
 	local char = getCharacter()
 	if not char then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
+	if not hrp or not humanoid then return end
 
-	-- Quick upward impulse for visual jump
-	local bv = Instance.new("BodyVelocity")
-	bv.MaxForce = Vector3.new(0, math.huge, 0)
-	bv.Velocity = Vector3.new(0, 30, 0)
-	bv.Parent = hrp
-	game:GetService("Debris"):AddItem(bv, 0.15)
+	-- One-shot upward boost is smoother than BodyVelocity and avoids physics jitter.
+	local vel = hrp.AssemblyLinearVelocity
+	local boostedY = math.min(math.max(vel.Y, 0) + 18, 26)
+	hrp.AssemblyLinearVelocity = Vector3.new(vel.X, boostedY, vel.Z)
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 end
 
 -- Exaggerated heavy punch: forward lunge
@@ -221,6 +382,12 @@ local function doAttack(attackType)
 
 	local config = CombatConfig.Attacks[attackType]
 	if not config then return end
+	local attackStaminaCost = attackType == "HeavyAttack"
+		and (staminaConfig.HeavyAttackCost or 18)
+		or (staminaConfig.LightAttackCost or 8)
+	if not consumeStamina(attackStaminaCost) then
+		return
+	end
 
 	-- Combo logic
 	if attackType == "LightAttack" then
@@ -272,12 +439,22 @@ local function tryUseHeldItem()
 	end
 	lastItemUseTime = now
 
-	ItemInteractEvent:FireServer("Use", getLookDirection())
+	local useDirection
+	if heldItemType == "Pistol" then
+		useDirection = getCameraAimDirection()
+	elseif heldItemType == "Rock" then
+		useDirection = getAutoAimDirection()
+	else
+		useDirection = getLookDirection()
+	end
+	ItemInteractEvent:FireServer("Use", useDirection)
 
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) then
-		if heldItemType == "Weapon" then
+		if heldItemType == "Weapon" or heldItemType == "Sword" then
 			AnimationManager.PlayHeavyPunch(char)
+		elseif heldItemType == "Pistol" then
+			AnimationManager.PlayLightPunch(char, 2)
 		else
 			AnimationManager.PlayLightPunch(char, 1)
 		end
@@ -306,13 +483,20 @@ local function tryThrowHeldItem()
 	end
 	lastItemUseTime = now
 
-	ItemInteractEvent:FireServer("Throw", getLookDirection())
+	ItemInteractEvent:FireServer("Throw", getAutoAimDirection())
 
 	local char = getCharacter()
 	if char and AnimationManager.HasJoints(char) then
 		AnimationManager.PlayHeavyPunch(char)
 	end
 	return true
+end
+
+local function equipInventorySlot(slotIndex)
+	if slotIndex < 1 or slotIndex > 3 then
+		return
+	end
+	ItemInteractEvent:FireServer("EquipSlot", slotIndex)
 end
 
 -- Dodge
@@ -326,6 +510,7 @@ local function doDodge()
 	if isBlocking then
 		isBlocking = false
 		BlockEvent:FireServer(false)
+		setBlockJumpSuppressed(false)
 	end
 
 	if playerSM then playerSM:SetState("Dodging", true) end
@@ -345,7 +530,7 @@ local function doDodge()
 
 	local char2 = getCharacter()
 	if char2 and AnimationManager.HasJoints(char2) then
-		AnimationManager.PlayDodge(char2)
+		AnimationManager.PlayDodge(char2, moveDir)
 	end
 
 	-- Visual: brief transparency
@@ -415,21 +600,22 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
 		if playerSM and playerSM:IsLocked() then return end
 		isBlocking = true
+		blockPoseActive = true
 		BlockEvent:FireServer(true)
-		if playerSM then playerSM:SetState("Blocking", true) end
+		setBlockJumpSuppressed(true)
 		playSfx(sfxBlock)
-		local char = getCharacter()
-		if char and AnimationManager.HasJoints(char) then
-			AnimationManager.PlayBlock(char)
-		end
-	end
-
-	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
-		doDodge()
 	end
 
 	if input.KeyCode == Enum.KeyCode.Q then
 		doDodge()
+	end
+
+	if input.KeyCode == Enum.KeyCode.Space and isBlocking then
+		local humanoid = getHumanoid()
+		if humanoid then
+			humanoid.Jump = false
+		end
+		return
 	end
 
 	if input.KeyCode == Enum.KeyCode.E then
@@ -440,7 +626,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		tryGrabSuplex()
 	end
 
-	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
 		setSprint(true)
 	end
 
@@ -450,6 +636,16 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 	if input.KeyCode == Enum.KeyCode.F then
 		tryThrowHeldItem()
+	end
+
+	if input.KeyCode == Enum.KeyCode.One then
+		equipInventorySlot(1)
+	end
+	if input.KeyCode == Enum.KeyCode.Two then
+		equipInventorySlot(2)
+	end
+	if input.KeyCode == Enum.KeyCode.Three then
+		equipInventorySlot(3)
 	end
 end)
 
@@ -471,16 +667,15 @@ UserInputService.InputEnded:Connect(function(input, processed)
 		if not isBlocking then return end
 		isBlocking = false
 		BlockEvent:FireServer(false)
-		if playerSM and playerSM:GetState() == "Blocking" then
-			playerSM:SetState("Idle", true)
-		end
+		setBlockJumpSuppressed(false)
 		local char = getCharacter()
 		if char and AnimationManager.HasJoints(char) then
-			AnimationManager.PlayUnblock(char)
+			AnimationManager.ClearBlockPose(char)
 		end
+		blockPoseActive = false
 	end
 
-	if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
 		setSprint(false)
 	end
 end)
@@ -492,27 +687,38 @@ RunService.RenderStepped:Connect(function()
 
 	local blockShield = char:FindFirstChild("BlockShield")
 	if isBlocking and isAlive() then
+		if pistolPoseActive then
+			AnimationManager.ClearPistolPose(char)
+			pistolPoseActive = false
+		end
+		AnimationManager.HoldBlockPose(char)
+		blockPoseActive = true
 		if not blockShield then
-			blockShield = Instance.new("Part")
+			blockShield = Instance.new("Highlight")
 			blockShield.Name = "BlockShield"
-			blockShield.Shape = Enum.PartType.Ball
-			blockShield.Size = Vector3.new(5, 5, 5)
-			blockShield.Transparency = 0.7
-			blockShield.BrickColor = BrickColor.new("Cyan")
-			blockShield.Material = Enum.Material.ForceField
-			blockShield.CanCollide = false
-			blockShield.Anchored = false
+			blockShield.FillColor = Color3.fromRGB(80, 220, 255)
+			blockShield.FillTransparency = 0.7
+			blockShield.OutlineColor = Color3.fromRGB(20, 120, 160)
+			blockShield.OutlineTransparency = 0.15
+			blockShield.DepthMode = Enum.HighlightDepthMode.Occluded
 			blockShield.Parent = char
-
-			local weld = Instance.new("WeldConstraint")
-			weld.Part0 = char:FindFirstChild("HumanoidRootPart")
-			weld.Part1 = blockShield
-			weld.Parent = blockShield
 		end
 	else
+		if blockPoseActive then
+			AnimationManager.ClearBlockPose(char)
+			blockPoseActive = false
+		end
 		if blockShield then
 			blockShield:Destroy()
 		end
+	end
+
+	if heldItemType == "Pistol" and isAlive() and not isBlocking then
+		AnimationManager.HoldPistolPose(char, getCameraAimDirection())
+		pistolPoseActive = true
+	elseif pistolPoseActive then
+		AnimationManager.ClearPistolPose(char)
+		pistolPoseActive = false
 	end
 
 	-- Combo reset
@@ -555,14 +761,17 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- Hit reaction when taking damage
-local DamageEvent = ReplicatedStorage:WaitForChild("DamageEvent")
+local DamageEvent = getRemote("DamageEvent")
 DamageEvent.OnClientEvent:Connect(function(damage, wasBlocked, sourcePos)
 	if wasBlocked then return end
 	playSfx(sfxHurt)
 	local char = getCharacter()
-	if char and AnimationManager.HasJoints(char) and not isBlocking then
-		if playerSM then playerSM:SetState("HitStun", true) end
-		AnimationManager.PlayHitReaction(char)
+	if char and not isBlocking then
+		if playerSM then
+			playerSM:SetState("HitStun", true)
+		elseif AnimationManager.HasJoints(char) then
+			AnimationManager.PlayHitReaction(char)
+		end
 	end
 end)
 
@@ -588,9 +797,18 @@ if ComicBubbleEvent then
 	end)
 end
 
-HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
+HeldItemStateEvent.OnClientEvent:Connect(function(payload)
+	local itemType = payload
+	if typeof(payload) == "table" then
+		itemType = payload.equipped
+		local slots = payload.slots or {}
+		inventorySlots = {slots[1], slots[2], slots[3]}
+		equippedSlot = payload.equippedSlot or 1
+	end
+
 	local wasHolding = heldItemType ~= nil
 	heldItemType = itemType
+	pushInventoryUpdate()
 	if itemType and not wasHolding and sfxPickup then
 		playSfx(sfxPickup)
 	elseif not itemType then
@@ -598,12 +816,39 @@ HeldItemStateEvent.OnClientEvent:Connect(function(itemType)
 	end
 end)
 
+StaminaBoostEvent.OnClientEvent:Connect(function(amount)
+	stamina = math.min(maxStamina, stamina + (amount or 0))
+	lastStaminaUseTime = 0
+	pushStaminaUpdate()
+end)
+
 player.CharacterAdded:Connect(function(character)
+	disableDefaultAnimate(character)
+
 	local humanoid = character:WaitForChild("Humanoid", 5)
 	if humanoid then
 		humanoid.WalkSpeed = BASE_WALK_SPEED
 	end
 	isSprinting = false
+	isBlocking = false
+	blockPoseActive = false
+	pistolPoseActive = false
+	blockJumpSuppressed = false
+	savedJumpPower = nil
+	savedJumpHeight = nil
+	stamina = maxStamina
+	inventorySlots = {nil, nil, nil}
+	equippedSlot = 1
+	lastStaminaUseTime = 0
+	pushStaminaUpdate()
+	pushInventoryUpdate()
+
+	local staleBlockShield = character:FindFirstChild("BlockShield")
+	if staleBlockShield then
+		staleBlockShield:Destroy()
+	end
+	AnimationManager.ClearBlockPose(character)
+	AnimationManager.ClearPistolPose(character)
 
 	-- Create player state machine
 	playerSM = StateMachine.new(character, CharacterStates.Player)
@@ -619,6 +864,8 @@ player.CharacterAdded:Connect(function(character)
 end)
 
 if player.Character then
+	disableDefaultAnimate(player.Character)
+
 	task.spawn(function()
 		task.wait(0.5)
 		if player.Character and not AnimationManager.HasJoints(player.Character) then
@@ -634,16 +881,38 @@ RunService.Heartbeat:Connect(function(dt)
 	if not char then return end
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
+	if isBlocking then
+		humanoid.Jump = false
+	end
 
 	local state = playerSM:GetState()
+	local staminaBefore = stamina
+	local moving = humanoid.MoveDirection.Magnitude > 0.05
+	if isSprinting and moving then
+		local sprintDrain = staminaConfig.SprintDrainPerSecond or 28
+		stamina = math.max(0, stamina - sprintDrain * dt)
+		lastStaminaUseTime = tick()
+		if stamina <= 0 then
+			setSprint(false)
+		end
+	else
+		local regenDelay = staminaConfig.RegenDelay or 0.8
+		if tick() - lastStaminaUseTime >= regenDelay then
+			local regenPerSecond = staminaConfig.RegenPerSecond or 24
+			stamina = math.min(maxStamina, stamina + regenPerSecond * dt)
+		end
+	end
+	if math.abs(stamina - staminaBefore) > 0.01 then
+		pushStaminaUpdate()
+	end
+
 	-- Only auto-set locomotion states when not in a locked/action state
 	if not playerSM:IsLocked() then
-		local moving = humanoid.MoveDirection.Magnitude > 0.05
 		if moving then
 			local want = isSprinting and "Sprinting" or "Walking"
 			if state ~= want then playerSM:SetState(want) end
 		else
-			if state ~= "Idle" and state ~= "Blocking" then
+			if state ~= "Idle" then
 				playerSM:SetState("Idle")
 			end
 		end
@@ -651,5 +920,7 @@ RunService.Heartbeat:Connect(function(dt)
 
 	playerSM:Update(dt)
 end)
+
+pushStaminaUpdate()
 
 print("[BrawlAlley] CombatController loaded")

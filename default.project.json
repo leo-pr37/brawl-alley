@@ -16,6 +16,9 @@
     },
     "StarterPlayer": {
       "$className": "StarterPlayer",
+      "$properties": {
+        "CharacterRigType": "R15"
+      },
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
         "Client": {
@@ -32,13 +35,13 @@
     "Lighting": {
       "$className": "Lighting",
       "$properties": {
-        "Ambient": [0.15, 0.12, 0.18],
-        "Brightness": 1.2,
-        "ClockTime": 21.5,
-        "FogColor": [0.15, 0.12, 0.1],
-        "FogEnd": 250,
-        "FogStart": 50,
-        "OutdoorAmbient": [0.2, 0.18, 0.22],
+        "Ambient": [0.37, 0.37, 0.41],
+        "Brightness": 2.4,
+        "ClockTime": 14.0,
+        "FogColor": [0.67, 0.67, 0.71],
+        "FogEnd": 1000,
+        "FogStart": 220,
+        "OutdoorAmbient": [0.47, 0.47, 0.51],
         "GlobalShadows": true,
         "Technology": "Future"
       }

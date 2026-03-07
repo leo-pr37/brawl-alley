@@ -70,7 +70,7 @@ EnemyTypes.Types = {
 	},
 }
 
-EnemyTypes.LevelOrder = {"Alley", "Subway", "Rooftops"}
+EnemyTypes.LevelOrder = {"Alley", "Subway", "Rooftops", "Warehouse", "FightClub"}
 EnemyTypes.DefaultLevel = "Alley"
 
 -- Level definitions: each level has handcrafted opening waves and endless scaling weights.
@@ -116,6 +116,34 @@ EnemyTypes.Levels = {
 			[8] = {{Type = "Speedster", Count = 7}, {Type = "Thug", Count = 4}, {Type = "Brawler", Count = 3}},
 		},
 		ProceduralWeights = {Thug = 0.35, Brawler = 0.40, Speedster = 0.60},
+	},
+	Warehouse = {
+		DisplayName = "Warehouse",
+		WaveTemplates = {
+			[1] = {{Type = "Thug", Count = 4}},
+			[2] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 1}},
+			[3] = {{Type = "Thug", Count = 4}, {Type = "Speedster", Count = 2}},
+			[4] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 2}},
+			[5] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 2}},
+			[6] = {{Type = "Thug", Count = 6}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 2}},
+			[7] = {{Type = "Thug", Count = 6}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 3}},
+			[8] = {{Type = "Thug", Count = 7}, {Type = "Brawler", Count = 4}, {Type = "Speedster", Count = 3}},
+		},
+		ProceduralWeights = {Thug = 0.65, Brawler = 0.45, Speedster = 0.25},
+	},
+	FightClub = {
+		DisplayName = "Fight Club",
+		WaveTemplates = {
+			[1] = {{Type = "Thug", Count = 3}, {Type = "Speedster", Count = 1}},
+			[2] = {{Type = "Thug", Count = 3}, {Type = "Brawler", Count = 1}, {Type = "Speedster", Count = 1}},
+			[3] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 1}, {Type = "Speedster", Count = 2}},
+			[4] = {{Type = "Thug", Count = 3}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 2}},
+			[5] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 2}, {Type = "Speedster", Count = 2}},
+			[6] = {{Type = "Thug", Count = 4}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 2}},
+			[7] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 3}, {Type = "Speedster", Count = 3}},
+			[8] = {{Type = "Thug", Count = 5}, {Type = "Brawler", Count = 4}, {Type = "Speedster", Count = 3}},
+		},
+		ProceduralWeights = {Thug = 0.45, Brawler = 0.55, Speedster = 0.35},
 	},
 }
 
